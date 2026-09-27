@@ -9,6 +9,10 @@
   },
   "homepage": "https://github.com/njrkay/whatbreaks",
   "repository": "https://github.com/njrkay/whatbreaks",
+  "documentationUrl": "https://github.com/njrkay/whatbreaks/blob/main/README.md",
+  "supportUrl": "https://github.com/njrkay/whatbreaks/issues",
+  "privacyPolicyUrl": "https://github.com/njrkay/whatbreaks/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/njrkay/whatbreaks/blob/main/LICENSE",
   "license": "MIT",
   "keywords": [
     "terraform",

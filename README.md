@@ -171,6 +171,8 @@ boundary.
 
 ## What the plugin reads, runs, writes, and sends
 
+The short version is in [PRIVACY.md](PRIVACY.md).
+
 - **Reads:** the plan JSON you point it at (or that it renders with `terraform show -json`), the
   plan file named in an `apply` command (to hash it), and its own marker files. In chat, the skill
   folder including `analyze_plan.py` is copied into Claude's code-execution sandbox and runs there.
