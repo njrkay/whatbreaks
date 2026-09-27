@@ -1,14 +1,16 @@
 #!/bin/bash
-# Temporary diagnostic: how does this platform's awk parse a many-line command?
-eval "$(sed -n '/^json_scalar() {/,/^}/p' hooks/apply-gate.sh)"
-cmd=$(yes 'true' | head -n 290; printf 'terraform apply tfplan')
-payload=$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps({"cwd":"/tmp","tool_input":{"command":sys.stdin.read()}}))')
-out=$(json_scalar "$payload" command)
-printf '::notice title=awk diag 290::awk=%s in=%s out=%s lines=%s head=[%s] tail=[%s]\n' "$(awk --version 2>&1 | head -1 | tr -d '\n')" "${#payload}" "${#out}" "$(printf '%s' "$out" | wc -l | tr -d ' ')" "$(printf '%s' "$out" | head -c 30 | tr '\n' '~')" "$(printf '%s' "$out" | tail -c 60 | tr '\n' '~')"
-cmd=$(yes 'true' | head -n 3; printf 'terraform apply tfplan')
-payload=$(printf '%s' "$cmd" | python3 -c 'import json,sys; print(json.dumps({"cwd":"/tmp","tool_input":{"command":sys.stdin.read()}}))')
-out=$(json_scalar "$payload" command)
-printf '::notice title=awk diag 3::in=%s out=%s lines=%s all=[%s]\n' "${#payload}" "${#out}" "$(printf '%s' "$out" | wc -l | tr -d ' ')" "$(printf '%s' "$out" | tr '\n' '~')"
-# and a version without gsub of newlines: does printf on a long string work?
-printf '%s' "$payload" | LC_ALL=C awk 'BEGIN{RS="\001"} NR==1{ printf "::notice title=awk diag raw::len=%d nr=%d\n", length($0), NR; exit }'
-printf '%s' "$payload" | LC_ALL=C awk 'NR==1{ printf "::notice title=awk diag default RS::len=%d\n", length($0); exit }'
+# Temporary diagnostic: which gsub forms turn a JSON \n escape into a newline on this awk?
+s='a\nb\nc'   # the two-character escape, as JSON carries it
+v() { printf '::notice title=awk %s::%s\n' "$1" "$(printf '%s' "$s" | LC_ALL=C awk "$2" | od -c | head -2 | tr '\n' ' ')"; }
+v A '{ gsub(/\\n/, "\n"); print }'
+v B '{ nl = "\n"; gsub(/\\n/, nl); print }'
+v C '{ gsub("\\\\n", "\n"); print }'
+v D '{ gsub(/\\n/, "\012"); print }'
+v E '{ gsub(/\\n/, "X"); print }'
+v F '{ gsub(/\\\\n/, "X"); print }'
+v G '{ n = split($0, p, /\\n/); for (k = 1; k <= n; k++) { if (k > 1) printf "\n"; printf "%s", p[k] }; print "" }'
+v H '{ gsub(/\\n/, "&"); print }'
+v I 'BEGIN { RS = "\001" } { gsub(/\\n/, "\n"); print }'
+v J '{ x = $0; gsub(/\\n/, "\n", x); print x }'
+v K '{ x = $0; gsub(/\\n/, "\n", x); printf "%s", x; print "" }'
+printf '::notice title=awk version::%s\n' "$(awk --version 2>&1 | head -1)"
