@@ -167,6 +167,35 @@ expect allow 'export TF_LOG=INFO; terraform apply ok.tfplan' "$TMP/infra" "expor
 expect allow 'ls -la; terraform apply ok.tfplan' "$TMP/infra" "ls then reviewed apply"
 expect allow 'if [ -f ok.tfplan ]; then terraform apply ok.tfplan; fi' "$TMP/infra" "if -f test then reviewed apply"
 expect allow $'cat <<EOF > README.md\nrun terraform apply -auto-approve\nEOF\nterraform apply ok.tfplan' "$TMP/infra" "heredoc body then reviewed apply on next line"
+
+# ===== third review round: false positives that must allow
+expect allow 'terraform init 2>&1 | tee init.log && terraform apply ok.tfplan' "$TMP/infra" "2>&1 before reviewed apply"
+expect allow 'terraform init >/dev/null 2>&1 && terraform apply ok.tfplan' "$TMP/infra" ">/dev/null 2>&1 before apply"
+expect allow 'echo hi &> log && terraform apply ok.tfplan' "$TMP/infra" "&> before apply"
+expect allow 'which terraform && terraform apply ok.tfplan' "$TMP/infra" "which terraform"
+expect allow 'command -v terraform && terraform apply ok.tfplan' "$TMP/infra" "command -v terraform"
+expect allow 'test -d terraform && terraform apply ok.tfplan' "$TMP/infra" "test -d terraform"
+expect allow 'terraform -version && terraform apply ok.tfplan' "$TMP/infra" "-version then apply"
+expect allow 'terraform state list && terraform apply ok.tfplan' "$TMP/infra" "state list then apply"
+expect allow 'tfenv use 1.9.8 && terraform apply ok.tfplan' "$TMP/infra" "tfenv use then apply"
+expect allow 'echo ${HOME} && terraform apply ok.tfplan' "$TMP/infra" "parameter expansion in echo"
+expect allow 'export TF_VAR_x="${Y:-a}" && terraform apply ok.tfplan' "$TMP/infra" "parameter expansion in export"
+expect allow 'echo "$(date): terraform apply starting" && terraform apply ok.tfplan' "$TMP/infra" "substitution inside echo text"
+expect allow 'echo "$(date) - terraform apply" >> log; terraform apply ok.tfplan' "$TMP/infra" "substitution in echo with log append"
+expect allow 'for i in 1; do terraform apply ok.tfplan; done' "$TMP/infra" "for loop over reviewed plan"
+expect allow 'gh pr create --title "terraform apply prod" --body "x"' "$TMP/infra" "quoted text argument to gh"
+expect allow 'aws sns publish --message "terraform apply prod finished"' "$TMP/infra" "quoted text argument to aws"
+expect allow 'set -o pipefail && terraform init 2>&1 | tee init.log && terraform apply ok.tfplan' "$TMP/infra" "pipefail + init + apply"
+
+# ===== third review round: deliberate bypasses that must deny
+expect deny 'docker run --entrypoint terraform myorg/tfimage:1.9 apply tfplan' "$TMP/infra" "entrypoint with image before subcommand"
+expect deny 'echo terraform apply tfplan | sudo bash' "$TMP/infra" "piped shell behind sudo"
+expect deny $'echo "a<<b"\nterraform apply -auto-approve' "$TMP/infra" "quoted << then apply on next line"
+expect deny $'ls\ntf apply tfplan' "$TMP/infra" "tf alias on second line"
+expect deny '(tf apply tfplan)' "$TMP/infra" "tf alias in subshell"
+expect deny "\$'terraform' apply tfplan" "$TMP/infra" "ANSI-C quoted binary"
+expect deny 'git checkout other && terraform apply ok.tfplan' "$TMP/infra" "git checkout before apply"
+expect deny 'git stash pop && terraform apply ok.tfplan' "$TMP/infra" "git stash pop before apply"
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply ok.tfplan"}}' "$TMP/infra" | env -u HOME bash "$HOOK" 2>/dev/null); rc=$?
 if [ "$rc" -eq 0 ] && [ -z "$out" ]; then PASS=$((PASS+1)); echo "PASS  allow  HOME unset does not crash"; else FAIL=$((FAIL+1)); echo "FAIL  HOME unset: rc=$rc out=$out"; fi
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply ok.tfplan"}}' "$TMP/infra" | env -u CLAUDE_PLUGIN_DATA bash "$HOOK" 2>/dev/null); rc=$?

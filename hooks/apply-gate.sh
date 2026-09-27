@@ -44,7 +44,7 @@ json_field() {
   # $1 = jq path, $2 = python expression on obj, $3 = key name for the sed fallback
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$INPUT" | jq -r "$1 // empty" 2>/dev/null
-  elif [ "$PY_OK" = 1 ]; then
+  elif py_ok; then
     printf '%s' "$INPUT" | python3 -c 'import json,sys
 try:
     o=json.load(sys.stdin)
@@ -72,7 +72,7 @@ marker_field() {
   # $1 = marker file, $2 = key -> prints the value lowercased, or nothing
   if command -v jq >/dev/null 2>&1; then
     jq -r ".$2 // empty" "$1" 2>/dev/null | tr 'A-Z' 'a-z'
-  elif [ "$PY_OK" = 1 ]; then
+  elif py_ok; then
     python3 -c 'import json,sys
 try:
     print(str(json.load(open(sys.argv[1])).get(sys.argv[2],"")).lower())
@@ -93,7 +93,8 @@ unquote() {
 
 is_tf_binary() {
   local b="$1"
-  b=${b##*/}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip path, .exe, image tag/digest
+  b=${b#\$}
+  b=${b##*/}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip $'…', path, .exe, image tag/digest
   case "$b" in terraform|tofu|opentofu|terragrunt|tf|tfenv|tgenv|tofuenv|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
   return 1
 }
@@ -121,8 +122,14 @@ record_earlier() {
 
 # ---------------------------------------------------------------- input
 INPUT=$(cat)
-PY_OK=0
-if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then PY_OK=1; fi
+PY_OK=""
+py_ok() {
+  if [ -z "$PY_OK" ]; then
+    PY_OK=0
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then PY_OK=1; fi
+  fi
+  [ "$PY_OK" = 1 ]
+}
 CMD=$(json_field '.tool_input.command' 'o.get("tool_input",{}).get("command")' 'command')
 
 # Fail closed if the payload looks terraform-ish but could not be parsed.
@@ -138,8 +145,9 @@ fi
 
 # Fast path on a de-quoted copy, so terr""aform or terra\form cannot slip past it.
 FAST=${CMD//\"/}; FAST=${FAST//\'/}; FAST=${FAST//\\/}
-case "$FAST" in
-  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*|*' tf '*|'tf '*|*';tf '*) ;;
+FASTN=" $(printf '%s' "$FAST" | tr ';&|(){}\n\t' '         ') "
+case "$FASTN" in
+  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*|*' tf '*) ;;
   *) allow ;;
 esac
 
@@ -172,11 +180,12 @@ esac
 
 # ---------------------------------------------------------------- split into simple commands
 # Physical lines first (heredoc bodies are line-based), then separators within a line.
-CMD=${CMD//$'\\\n'/ }            # join backslash-newline continuations
 SEGCOUNT=0
 LINES="$CMD"
+PENDING=""          # a line ending in a backslash is continued on the next one
 
 EFFECTIVE_CWD="$CWD"
+LAST_CLASS=""       # classification of the previous simple command: text, harmless, tf, other
 SAW_PLAN_SUBCMD=0   # an earlier command on this line ran `plan` (may have written the file)
 SAW_UNSAFE=0        # an earlier command on this line is not known to be harmless
 EARLIER_BASENAMES=" "   # basenames mentioned by earlier commands that could write them
@@ -194,6 +203,9 @@ HARMLESS="cd pushd popd export unset set true false : echo printf ls pwd test [ 
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
 TF_READONLY="init validate fmt show output version providers graph console test login logout workspace refresh get import taint untaint force-unlock metadata modules plan"
 
+SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh nix-shell nix env su runuser chroot"
+GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
+
 while IFS= read -r LINE; do
   # ---- here-document bodies are data; skip them until the terminator line
   if [ -n "$HEREDOC_END" ]; then
@@ -201,18 +213,46 @@ while IFS= read -r LINE; do
     [ "$t" = "$HEREDOC_END" ] && HEREDOC_END=""
     continue
   fi
+  # ---- join backslash-newline continuations (only outside heredoc bodies)
+  if [ -n "$PENDING" ]; then LINE="$PENDING $LINE"; PENDING=""; fi
+  case "$LINE" in *\\) PENDING=${LINE%\\}; continue ;; esac
+  # ---- heredoc start, detected on tokens so that a quoted "a<<b" does not count
   case "$LINE" in
     *'<<'*)
-      case "$LINE" in *'<<<'*) ;; *)
-        hd=$(printf '%s' "$LINE" | sed -n 's/.*<<-\{0,1\}[[:space:]]*["'"'"']\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | head -1)
-        [ -n "$hd" ] && HEREDOC_END="$hd" ;;
-      esac ;;
+      HT=()
+      case "$LINE" in
+        *\"*|*\'*|*\\*)
+          if py_ok; then
+            while IFS= read -r tok; do HT+=("$tok"); done < <(printf '%s' "$LINE" | python3 -c 'import shlex,sys
+s=sys.stdin.read()
+try:
+    toks=shlex.split(s, comments=False, posix=True)
+except ValueError:
+    toks=s.split()
+for t in toks:
+    print(t[:4096])' 2>/dev/null)
+          fi
+          if [ "${#HT[@]}" -eq 0 ]; then read -r -a HT <<< "$LINE" || true; fi ;;
+        *) read -r -a HT <<< "$LINE" || true ;;
+      esac
+      k=0
+      while [ $k -lt "${#HT[@]}" ]; do
+        tok="${HT[$k]}"
+        case "$tok" in
+          '<<<'*) ;;
+          '<<'|'<<-') if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END=$(unquote "${HT[$((k+1))]}"); fi; break ;;
+          '<<'*) tok=${tok#'<<'}; tok=${tok#-}; HEREDOC_END=$(unquote "$tok"); break ;;
+        esac
+        k=$((k+1))
+      done ;;
   esac
 
   LINE_COMPUTED=0
   case "$LINE" in *'$('*|*'`'*|*'${'*) LINE_COMPUTED=1 ;; esac
 
-  SEGS=${LINE//'||'/$'\n'}
+  SEGS=" $LINE"
+  SEGS=${SEGS//'>&'/'>@AMP@'}; SEGS=${SEGS//'<&'/'<@AMP@'}; SEGS=${SEGS//'&>'/'@AMP@>'}
+  SEGS=${SEGS//'||'/$'\n'}
   SEGS=${SEGS//'&&'/$'\n'}
   SEGS=${SEGS//';'/$'\n'}
   SEGS=${SEGS//'|'/$'\n'@PIPE@ }
@@ -220,18 +260,28 @@ while IFS= read -r LINE; do
   SEGS=${SEGS//'$('/$'\n'@SUBST@ }
   SEGS=${SEGS//'`'/$'\n'@SUBST@ }
   SEGS=${SEGS//'('/$'\n'}
-  SEGS=${SEGS//')'/$'\n'}
-  SEGS=${SEGS//'{'/$'\n'}
-  SEGS=${SEGS//'}'/$'\n'}
+  SEGS=${SEGS//')'/$'\n'@TAIL@ }
+  SEGS=${SEGS//' { '/$'\n'}; SEGS=${SEGS//' {'$'\n'/$'\n'}
+  SEGS=${SEGS//' }'/$'\n'}
+  SEGS=${SEGS//'@AMP@'/'&'}
+  SUBST_DEPTH=0; PRE_CLASS=""
 
   while IFS= read -r SEG; do
     SEGCOUNT=$((SEGCOUNT+1))
     if [ "$SEGCOUNT" -gt 300 ]; then
       case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command has too many parts ($SEGCOUNT) to gate safely; split it up." ;; esac
     fi
-    PIPED=0; COMPUTED=0
+    PIPED=0; COMPUTED=0; INHERIT_TEXT=0
     case "$SEG" in @PIPE@*) PIPED=1; SEG=${SEG#@PIPE@} ;; esac
-    case "$SEG" in @SUBST@*) COMPUTED=1; SEG=${SEG#@SUBST@} ;; esac
+    case "$SEG" in @SUBST@*) COMPUTED=1; SEG=${SEG#@SUBST@}; SUBST_DEPTH=$((SUBST_DEPTH+1)); PRE_CLASS="$LAST_CLASS" ;; esac
+    case "$SEG" in @TAIL@*)
+      SEG=${SEG#@TAIL@}
+      if [ "$SUBST_DEPTH" -gt 0 ]; then
+        SUBST_DEPTH=$((SUBST_DEPTH-1))
+        # the text after a $(...) belongs to the command that contained it
+        [ "$PRE_CLASS" = "text" ] && INHERIT_TEXT=1
+      fi ;;
+    esac
     case "$SEG" in *'$'*) COMPUTED=1 ;; esac
     REDIRECT_IN=0
     case "$SEG" in *'<'*) REDIRECT_IN=1 ;; esac
@@ -240,7 +290,7 @@ while IFS= read -r LINE; do
     W=()
     case "$SEG" in
       *\"*|*\'*|*\\*)
-        if [ "$PY_OK" = 1 ]; then
+        if py_ok; then
           while IFS= read -r tok; do W+=("$tok"); done < <(printf '%s' "$SEG" | python3 -c 'import shlex,sys
 s=sys.stdin.read()
 try:
@@ -273,26 +323,30 @@ for t in toks:
     while [ $i -lt "$N" ]; do
       t="${W[$i]}"
       case "$t" in
-        then|do|else|elif|'!'|if|while|until|fi|done|esac|in|case|for|select) i=$((i+1)); continue ;;
+        for|select|case|function) i="$N"; break ;;              # loop/case headers: no command here
+        then|do|else|elif|'!'|if|while|until|fi|done|esac|in) i=$((i+1)); continue ;;
         [A-Za-z_]*=*) i=$((i+1)); continue ;;
       esac
       break
     done
-    if [ $i -ge "$N" ]; then PREV_SEG="$SEG"; continue; fi
+    if [ $i -ge "$N" ]; then LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue; fi
     FIRST="${W[$i]}"; FIRSTBASE=${FIRST##*/}
+    if [ "$INHERIT_TEXT" -eq 1 ]; then LAST_CLASS="text"; PREV_SEG="$SEG"; continue; fi
 
     if [ "$FIRSTBASE" = "cd" ] || [ "$FIRSTBASE" = "pushd" ]; then
       if [ $((i+1)) -lt "$N" ]; then
         d="${W[$((i+1))]}"
         case "$d" in /*) EFFECTIVE_CWD="$d" ;; "~"*) EFFECTIVE_CWD="$HOME${d#\~}" ;; *) EFFECTIVE_CWD="$EFFECTIVE_CWD/$d" ;; esac
       fi
-      PREV_SEG="$SEG"; continue
+      LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue
     fi
 
-    # `echo terraform apply x | bash`: a shell reading its script from a pipe
+    # `echo terraform apply x | bash` (also behind sudo/env): a shell reading its script from a pipe
     if [ "$PIPED" -eq 1 ]; then
-      case "$FIRSTBASE" in
-        bash|sh|zsh|dash|ksh)
+      shell_tok=""
+      for tok in "${W[@]+"${W[@]}"}"; do case "${tok##*/}" in bash|sh|zsh|dash|ksh) shell_tok="$tok" ;; esac; done
+      case "$shell_tok" in
+        ?*)
           has_c=0
           for tok in "${W[@]+"${W[@]}"}"; do case "$tok" in -c|-*c*) has_c=1 ;; esac; done
           if [ "$has_c" -eq 0 ]; then
@@ -309,15 +363,26 @@ for t in toks:
     # unless the command only consumes text.
     IS_TEXT=0
     for c in $TEXT_CONSUMERS; do [ "$FIRSTBASE" = "$c" ] && IS_TEXT=1; done
+    IS_HARMLESS=0
+    for c in $HARMLESS; do [ "$FIRSTBASE" = "$c" ] && IS_HARMLESS=1; done
+    SCAN=1
+    [ "$IS_TEXT" -eq 1 ] && SCAN=0
+    case "$FIRSTBASE" in
+      command) if [ $((i+1)) -lt "$N" ]; then case "${W[$((i+1))]}" in -v|-V|-p) SCAN=0 ;; esac; fi ;;
+      exec|env) ;;
+      *) [ "$IS_HARMLESS" -eq 1 ] && SCAN=0 ;;    # `which terraform`, `ls tf`: an argument, not an invocation
+    esac
     FOUND=-1
-    if [ "$IS_TEXT" -eq 0 ]; then
+    if [ "$SCAN" -eq 1 ]; then
       # First look at the tokens as quoted (so "my plan.tfplan" stays one argument).
       j=$i
       while [ $j -lt "$N" ]; do
         if is_tf_binary "${W[$j]}"; then FOUND=$j; break; fi
         j=$((j+1))
       done
-      if [ "$FOUND" -lt 0 ]; then
+      HAS_SHELL=0
+      for tok in "${W[@]+"${W[@]}"}"; do for c in $SHELLS; do [ "${tok##*/}" = "$c" ] && HAS_SHELL=1; done; done
+      if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
         # Not found: re-split every token on whitespace so that a quoted "terraform apply x"
         # handed to a shell, ssh, xargs, or a wrapper becomes separate words, and scan again.
         NEWW=()
@@ -341,13 +406,19 @@ for t in toks:
     if [ "$FOUND" -lt 0 ]; then
       # Not a terraform command. Is it harmless to run before an apply on the same line?
       harmless=0
-      for c in $HARMLESS $TEXT_CONSUMERS; do [ "$FIRSTBASE" = "$c" ] && harmless=1; done
+      [ "$IS_HARMLESS" -eq 1 ] && harmless=1
+      [ "$IS_TEXT" -eq 1 ] && harmless=1
+      if [ "$FIRSTBASE" = "git" ] && [ $((i+1)) -lt "$N" ]; then
+        for c in $GIT_MUTATING; do [ "${W[$((i+1))]}" = "$c" ] && harmless=0; done   # can restore a tracked plan file
+      fi
       [ "$harmless" -eq 0 ] && SAW_UNSAFE=1
       mention=1
       for c in $READ_ONLY_MENTIONERS; do [ "$FIRSTBASE" = "$c" ] && mention=0; done
       record_earlier "$mention" "${W[@]+"${W[@]}"}"
+      if [ "$IS_TEXT" -eq 1 ]; then LAST_CLASS="text"; elif [ "$harmless" -eq 1 ]; then LAST_CLASS="harmless"; else LAST_CLASS="other"; fi
       PREV_SEG="$SEG"; continue
     fi
+    LAST_CLASS="tf"
 
     BIN="${W[$FOUND]}"; BIN=${BIN##*/}; BIN=${BIN%.exe}; BIN=${BIN%%:*}; BIN=${BIN%%@*}
     i=$((FOUND+1))
@@ -375,14 +446,22 @@ for t in toks:
 
     KNOWN=0
     for c in $TF_READONLY apply destroy; do [ "$SUB" = "$c" ] && KNOWN=1; done
+    if [ "$KNOWN" -eq 0 ]; then
+      # e.g. `docker run --entrypoint terraform image:tag apply tfplan`: the real subcommand comes later
+      j=$i
+      while [ $j -lt "$N" ]; do
+        case "${W[$j]}" in apply|destroy) SUB="${W[$j]}"; i=$((j+1)); KNOWN=1; break ;; esac
+        j=$((j+1))
+      done
+    fi
     if [ "$KNOWN" -eq 0 ] && { [ "$COMPUTED" -eq 1 ] || [ "$LINE_COMPUTED" -eq 1 ]; }; then
       deny "whatbreaks: the $BIN subcommand is computed at run time (a variable, substitution, or quoting trick), so it cannot be checked. Write the command out plainly: $BIN plan -out=tfplan, /whatbreaks:review tfplan, $BIN apply tfplan."
     fi
     case "$SUB" in
       apply|destroy) ;;
       *)
+        # any other terraform subcommand cannot rewrite a plan file; only its redirects matter
         record_earlier 0 "${W[@]+"${W[@]}"}"
-        [ "$KNOWN" -eq 0 ] && SAW_UNSAFE=1
         PREV_SEG="$SEG"; continue ;;
     esac
 
