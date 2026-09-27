@@ -19,14 +19,14 @@ This is the output of `terraform show -json tfplan`:
     "root_module": {
       "resources": [
         {
-          "address": "google_compute_firewall.allow_ssh",
+          "address": "google_compute_firewall.allow_admin",
           "mode": "managed",
           "type": "google_compute_firewall",
-          "name": "allow_ssh",
+          "name": "allow_admin",
           "provider_name": "registry.terraform.io/hashicorp/google",
           "schema_version": 0,
           "values": {
-            "name": "allow-ssh",
+            "name": "allow-admin",
             "network": "default",
             "direction": "INGRESS",
             "disabled": false,
@@ -85,10 +85,10 @@ This is the output of `terraform show -json tfplan`:
   },
   "resource_changes": [
     {
-      "address": "google_compute_firewall.allow_ssh",
+      "address": "google_compute_firewall.allow_admin",
       "mode": "managed",
       "type": "google_compute_firewall",
-      "name": "allow_ssh",
+      "name": "allow_admin",
       "provider_name": "registry.terraform.io/hashicorp/google",
       "change": {
         "actions": [
@@ -96,7 +96,7 @@ This is the output of `terraform show -json tfplan`:
         ],
         "before": null,
         "after": {
-          "name": "allow-ssh",
+          "name": "allow-admin",
           "network": "default",
           "direction": "INGRESS",
           "disabled": false,

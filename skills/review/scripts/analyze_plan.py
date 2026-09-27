@@ -314,7 +314,7 @@ ESCALATION_ACTIONS = {
 }
 
 ADMIN_PORTS = {
-    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 135: "RPC", 137: "NetBIOS", 138: "NetBIOS",
+    21: "FTP", 22: "secure shell", 23: "Telnet", 25: "SMTP", 135: "RPC", 137: "NetBIOS", 138: "NetBIOS",
     139: "NetBIOS", 445: "SMB", 1433: "MSSQL", 1434: "MSSQL", 1521: "Oracle", 2049: "NFS",
     2181: "ZooKeeper", 2375: "Docker", 2376: "Docker", 2379: "etcd", 2380: "etcd",
     3306: "MySQL", 3389: "RDP", 4505: "Salt", 4506: "Salt", 5432: "PostgreSQL", 5601: "Kibana",
@@ -1174,7 +1174,7 @@ PUBLIC_TOGGLES = [
 
 def rule_network(ch: Change) -> list[Finding]:
     out: list[Finding] = []
-    if ch.mode != "managed" or ch.kind in ("delete", "no-op", "read", "forget"):
+    if ch.mode != "managed" or ch.kind in ("delete", "read", "no-op", "forget"):
         return out
     b = ch.before if isinstance(ch.before, dict) else {}
     a = ch.after if isinstance(ch.after, dict) else {}
@@ -1557,18 +1557,18 @@ def _risky_signatures(doc: dict | None, is_trust: bool, is_resource_policy: bool
 
 def rule_iam(ch: Change) -> list[Finding]:
     out: list[Finding] = []
-    if ch.mode != "managed" or ch.kind in ("no-op", "read", "forget"):
+    if ch.mode != "managed" or ch.kind in ("read", "no-op", "forget"):
         return out
     b = ch.before if isinstance(ch.before, dict) else {}
     a = ch.after if isinstance(ch.after, dict) else {}
 
     if ch.kind == "delete":
-        # Losing an SCP/permission guard is a widening; losing a policy is covered by destructive rules.
+        # Losing an organization policy guard is a widening; losing a policy is covered by destructive rules.
         if ch.type in ("aws_organizations_policy", "aws_organizations_policy_attachment"):
             out.append(Finding("WB-I006", "HIGH", "iam", ch.address, ch.type, "delete",
-                               "Organization policy (SCP) removed",
+                               "Organization service control policy removed",
                                f"`{ch.address}` is removed; guardrails it enforced across accounts no longer apply.",
-                               "Confirm the SCP is superseded before removing it.", {}))
+                               "Confirm the service control policy is superseded before removing it.", {}))
         return out
 
     is_trust = ch.type in TRUST_TYPES

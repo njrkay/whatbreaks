@@ -148,8 +148,8 @@ boundary.
 - A denial applies in every permission mode, including bypass mode: hook decisions are separate
   from the permission system (per the Claude Code hooks reference; verified on 2.1.283).
 - It only sees the command string. It looks through `cd`, `sudo`, `timeout`, `aws-vault` and other
-  wrappers, shells and remote shells given a command string, `&&`/`;`/`|` chains, subshells, loops
-  and `-chdir`, and it treats `TF_CLI_ARGS`, `yes |`, and stdin redirection as auto-approve. A
+  wrappers, shells and remote shells given a command string (also any wrapper whose `-c`, `--run`
+  or `--command` flag carries one), `&&`/`;`/`|` chains, subshells, loops and `-chdir`, and it treats `TF_CLI_ARGS`, `yes |`, and stdin redirection as auto-approve. A
   binary named through a variable (`$TF apply`) is denied when the same command mentions terraform
   and invisible when the variable was set earlier. It cannot see inside a script file, a Makefile
   target, or an alias (`./deploy.sh`, `make apply`), and it does not gate `state push`/`state rm`,
@@ -193,7 +193,7 @@ boundary.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fixtures.py   # 26 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh                                    # 182 apply-gate scenarios, including known bypass shapes
+bash tests/test_hook.sh                                    # 184 apply-gate scenarios, including known bypass shapes
 python3 tests/check_submission.py                          # the directory's pre-submission rules
 claude plugin validate .                                   # manifest and component checks
 ```

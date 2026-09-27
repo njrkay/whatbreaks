@@ -1,5 +1,5 @@
 ---
-name: sg-open-ssh
+name: sg-open-port-22
 description: "Quick sanity check on this plan before I apply \u2014 it's just an instance resize and a security group tweak."
 tags: ["smoke", "aws", "exposure"]
 max_turns: 15
@@ -47,7 +47,7 @@ This is the output of `terraform show -json tfplan`:
                 "cidr_blocks": [
                   "0.0.0.0/0"
                 ],
-                "description": "ssh for debugging",
+                "description": "remote login for debugging",
                 "from_port": 22,
                 "to_port": 22,
                 "protocol": "tcp",
@@ -165,7 +165,7 @@ This is the output of `terraform show -json tfplan`:
               "cidr_blocks": [
                 "0.0.0.0/0"
               ],
-              "description": "ssh for debugging",
+              "description": "remote login for debugging",
               "from_port": 22,
               "to_port": 22,
               "protocol": "tcp",

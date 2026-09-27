@@ -23,11 +23,11 @@ CASES = {
         verdict=r"(?i)\bBLOCK\b|\bcritical\b", resource=r"aws_db_instance\.main",
         fix=r"(?i)final snapshot|skip_final_snapshot|snapshot", tags=["smoke", "aws", "destructive"],
         rubric="PASS if the response says the RDS instance aws_db_instance.main will be replaced (destroyed and recreated) because master_username cannot be changed in place, warns that its data would be lost and that no final snapshot is taken, and tells the user not to apply as-is (or to take a backup / revert the change first). FAIL if it calls the plan safe, misses the replacement, or does not mention data loss."),
-    "sg-open-ssh": dict(
+    "sg-open-port-22": dict(
         prompt="Quick sanity check on this plan before I apply — it's just an instance resize and a security group tweak.",
         verdict=r"(?i)\bBLOCK\b|\bcritical\b", resource=r"aws_security_group\.web",
         fix=r"(?i)bastion|session manager|ssm|restrict|specific (cidr|ip)|security group", tags=["smoke", "aws", "exposure"],
-        rubric="PASS if the response flags that the security group change opens port 22 (SSH) to 0.0.0.0/0 (the whole internet) as the top risk and recommends restricting the source (bastion, SSM, VPN, or specific CIDRs), while treating the instance type change as low risk. FAIL if it misses the SSH exposure or treats the plan as safe."),
+        rubric="PASS if the response flags that the security group change opens port 22 (remote login) to 0.0.0.0/0 (the whole internet) as the top risk and recommends restricting the source (bastion, SSM, VPN, or specific CIDRs), while treating the instance type change as low risk. FAIL if it misses the port 22 exposure or treats the plan as safe."),
     "iam-admin-wildcard": dict(
         prompt="Review this plan for me. We're updating a deploy policy and attaching a policy to the CI role.",
         verdict=r"(?i)\bBLOCK\b|\bcritical\b", resource=r"aws_iam_policy\.deploy",

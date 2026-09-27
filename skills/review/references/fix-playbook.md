@@ -145,7 +145,7 @@ soft_delete_retention_days = 90
 
 ```hcl
 # Restrict a security group rule to known sources
-resource "aws_vpc_security_group_ingress_rule" "ssh" {
+resource "aws_vpc_security_group_ingress_rule" "admin" {
   security_group_id            = aws_security_group.web.id
   ip_protocol                  = "tcp"
   from_port                    = 22

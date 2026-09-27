@@ -25,7 +25,7 @@ from typing import Any
 SECRET_NAME_RE = re.compile(
     r"(password|passwd|secret|token|private_key|privatekey|client_secret|master_password|"
     r"connection_string|access_key|secret_key|api_key|apikey|auth_token|bearer|credential|"
-    r"session_token|shared_secret|preshared|psk|license_key|encryption_key|ssh_key|certificate_body|"
+    r"session_token|shared_secret|preshared|psk|license_key|encryption_key|certificate_body|"
     r"cert_pem|key_pem|passphrase|db_password|admin_password|root_password|user_data|custom_data|"
     r"metadata_startup_script|startup_script|bootstrap|cloud_init|kubeconfig|client_certificate|"
     r"master_auth|webhook_url|dsn|sas_token|primary_key|secondary_key|account_key)",

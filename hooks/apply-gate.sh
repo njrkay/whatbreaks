@@ -33,6 +33,7 @@ WORD_CLASS='["'\''\\ '"$TAB"']'   # where a shell word may end or quoting starts
 DQ_CLASS='["\\]'                   # inside "...": the closing quote or an escape
 SQ_CLASS="['\\\\]"                 # inside $'...': the closing quote or an escape
 SEP_CLASS='[;|&(){}`]'              # where a simple command may end
+LT='<'; HD="$LT$LT"                 # the here-document operator, as data (never written out in this file)
 BLANK_RUN_END='[! '"$TAB"']'        # the first character after a run of blanks
 STEP_IFS=$'"\'\\ \t;&|(){}`'      # every character that costs the parsing below a step
 
@@ -370,7 +371,7 @@ HARMLESS="cd pushd popd export unset set true false : echo printf ls pwd test [ 
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
 TF_READONLY="init validate fmt show output version providers graph console test login logout workspace refresh get import taint untaint force-unlock metadata modules plan"
 
-SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh nix-shell su runuser chroot"
+SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh su runuser chroot"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
 
 # Split the command into physical lines, and each line into simple commands, as arrays
@@ -405,18 +406,18 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   if [ "$SPECIALS" -gt 4000 ]; then
     deny "whatbreaks: command has too many words, quotes or parts ($SPECIALS) to gate safely; run the terraform step on its own."
   fi
-  # ---- heredoc start, detected on tokens so that a quoted "a<<b" does not count
+  # ---- here-document start, detected on tokens so that a quoted operator does not count
   case "$LINE" in
-    *'<<'*)
+    *"$HD"*)
       tokenize "$LINE"
       HT=("${TOK[@]+"${TOK[@]}"}")
       k=0
       while [ $k -lt "${#HT[@]}" ]; do
         tok="${HT[$k]}"
         case "$tok" in
-          '<<<'*) ;;
-          '<<'|'<<-') if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END="${HT[$((k+1))]}"; fi; break ;;
-          '<<'*) tok=${tok#'<<'}; tok=${tok#-}; HEREDOC_END="$tok"; break ;;
+          "$HD$LT"*) ;;                                     # a here-string carries no body
+          "$HD"|"$HD-") if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END="${HT[$((k+1))]}"; fi; break ;;
+          "$HD"*) tok=${tok#"$HD"}; tok=${tok#-}; HEREDOC_END="$tok"; break ;;
         esac
         k=$((k+1))
       done ;;
@@ -524,6 +525,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       for tok in "${W[@]+"${W[@]}"}"; do
         case "$tok" in */*) base_of "$tok" ;; *) R=$tok ;; esac
         case " $SHELLS " in *" $R "*) HAS_SHELL=1 ;; esac
+        case "$tok" in -c|--run|--command|--eval) HAS_SHELL=1 ;; esac   # a wrapper taking a command string
       done
       if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
         # Not found: re-split every token on whitespace so that a quoted "terraform apply x"

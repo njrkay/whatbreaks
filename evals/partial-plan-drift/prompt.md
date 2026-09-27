@@ -140,7 +140,7 @@ This is the output of `terraform show -json tfplan`:
               "cidr_blocks": [
                 "0.0.0.0/0"
               ],
-              "description": "ssh for debugging",
+              "description": "remote login for debugging",
               "from_port": 22,
               "to_port": 22,
               "protocol": "tcp",

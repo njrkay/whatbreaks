@@ -215,6 +215,8 @@ expect deny 'terraform apply "tfplan' "$TMP/infra" "unterminated quote still gat
 expect deny "terraform apply tfplan '" "$TMP/infra" "trailing unterminated quote still gated"
 expect deny 'terraform ap""ply tfplan' "$TMP/infra" "subcommand split by empty quotes"
 expect deny 'nix run nixpkgs#terraform -- apply tfplan' "$TMP/infra" "flake attribute naming the binary"
+expect deny 'devbox run --command "terraform apply tfplan"' "$TMP/infra" "unknown wrapper with a command-string flag"
+expect allow 'gh pr create --title "terraform apply prod" --body x && terraform plan' "$TMP/infra" "title string with a plain flag stays text"
 expect deny 'nix shell nixpkgs#opentofu -c tofu apply tfplan' "$TMP/infra" "nix shell then tofu apply"
 # size guards: a command the hook could not finish parsing in time must deny, not time out (a timed-out hook allows)
 expect deny "$(yes 'true;' | head -n 400 | tr -d '\n') terraform \$(echo ap)ply tfplan" "$TMP/infra" "hundreds of parts, computed subcommand"

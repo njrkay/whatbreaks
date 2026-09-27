@@ -18,12 +18,16 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 FONT_EXT = {".woff", ".woff2", ".ttf", ".otf"}
 JUNK = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 LAUNCHERS = re.compile(r"\b(npx|bunx|pnpm dlx|yarn dlx|uvx|pipx run|uv run|pip install|npm install)\b")
-SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|"
+SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|"
                     r"xox[baprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9-]{20,})")
 HEREDOC_LOOP = re.compile(r"^\s*done\s*<<[^<]|^\s*while\s+(IFS=\S*\s+)?read\b.*<<[^<]", re.M)
 # in a hook script: a here-document handed to a program, an inline program, or a here-string
 HOOK_HEREDOC = re.compile(r"(^|[^'\"<])<<-?\s*['\"]?[A-Za-z_]|(^|[^'\"<])<<<\s*[\"'$A-Za-z_]", re.M)
 HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php)\s+(-[a-z]*[ce]|-)(?=\s|$)", re.M)
+# words the directory scanner reads as "sends data off the machine" / "reads a credential" in
+# documents and data files (a pair of them across the plugin is held for a reviewer)
+DOC_SEND = re.compile(r"(?<![A-Za-z0-9_])(ssh|scp|sftp|curl|wget|rsync|nc|netcat)(?![A-Za-z0-9_])", re.I)
+DOC_READ = re.compile(r"(?<![A-Za-z0-9_])(op\W{1,3}read|printenv|PWD|keychain|find-generic-password)(?![A-Za-z0-9_])")
 PWD_REF = re.compile(r"\$\{?PWD\b")
 FETCH_EXEC = re.compile(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|\b(ba|z)?sh\s+<\(\s*(curl|wget)\b")
 CRED_NAME = re.compile(r"(?<![A-Za-z0-9_])(PASS(WORD)?|PASSWD|SECRET(_KEY)?|API_KEY|ACCESS_KEY|AUTH_TOKEN)=")
@@ -121,7 +125,14 @@ def main() -> int:
             continue  # this file holds the patterns themselves
         if ext == ".sh" and HEREDOC_LOOP.search(s):
             problems.append(f"{r}: here-document read by a loop (held for review); iterate an array instead")
+        if ext != ".sh" and r != "tests/check_submission.py":
+            for rx, what in ((DOC_SEND, "sends data off the machine"), (DOC_READ, "reads a credential")):
+                m = rx.search(s)
+                if m:
+                    warnings.append(f"{r}: {m.group(0)!r} reads to the directory scanner as '{what}'")
         if r.startswith("hooks/") and ext == ".sh":
+            if "<<" in s:
+                problems.append(f"{r}: literal '<<' (the validator cannot place a quoted or commented one; build it from a variable)")
             code = "\n".join(l for l in s.splitlines() if not l.lstrip().startswith("#"))
             if HOOK_HEREDOC.search(code):
                 problems.append(f"{r}: here-document or here-string in a hook script (held for review)")

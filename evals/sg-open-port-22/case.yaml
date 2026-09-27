@@ -1,4 +1,4 @@
 schema_version: "1.1"
-name: sg-open-ssh
+name: sg-open-port-22
 context:
   add_dirs: [resources]

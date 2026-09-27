@@ -131,13 +131,13 @@ FIXTURES["rds-replace"] = plan([
        after_unknown={"last_modified": True}),
 ])
 
-# 2. Security group gains SSH from the world (before: HTTPS only)
+# 2. Security group gains port 22 from the world (before: HTTPS only)
 _sg_before = {"id": "sg-0abc", "name": "web", "vpc_id": "vpc-0abc",
               "ingress": [sg_block(443, 443, "tcp", ["0.0.0.0/0"], "https")],
               "egress": [sg_block(0, 0, "-1", ["0.0.0.0/0"])], "tags": {}}
 _sg_after = dict(_sg_before, ingress=[sg_block(443, 443, "tcp", ["0.0.0.0/0"], "https"),
-                                       sg_block(22, 22, "tcp", ["0.0.0.0/0"], "ssh for debugging")])
-FIXTURES["sg-open-ssh"] = plan([
+                                       sg_block(22, 22, "tcp", ["0.0.0.0/0"], "remote login for debugging")])
+FIXTURES["sg-open-port-22"] = plan([
     rc("aws_security_group.web", "aws_security_group", ["update"], _sg_before, _sg_after),
     rc("aws_instance.web", "aws_instance", ["update"],
        {"id": "i-0abc", "instance_type": "t3.small", "ami": "ami-0abc", "tags": {"Name": "web"}},
@@ -211,8 +211,8 @@ FIXTURES["deletion-protection-off"] = plan([
 
 # 8. GCP: firewall opens 22 to the world, Cloud SQL authorized network 0.0.0.0/0
 FIXTURES["gcp-sql-public"] = plan([
-    rc("google_compute_firewall.allow_ssh", "google_compute_firewall", ["create"], None,
-       {"name": "allow-ssh", "network": "default", "direction": "INGRESS", "disabled": False,
+    rc("google_compute_firewall.allow_admin", "google_compute_firewall", ["create"], None,
+       {"name": "allow-admin", "network": "default", "direction": "INGRESS", "disabled": False,
         "source_ranges": ["0.0.0.0/0"], "allow": [{"protocol": "tcp", "ports": ["22"]}], "deny": []}),
     rc("google_sql_database_instance.main", "google_sql_database_instance", ["update"],
        {"id": "main", "name": "main", "database_version": "POSTGRES_16", "deletion_protection": True,

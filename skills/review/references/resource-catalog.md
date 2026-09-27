@@ -64,7 +64,7 @@ A type absent from every list is rated by whole tokens of its name after the pro
 
 ## Ports treated as admin/database ports (open to 0.0.0.0/0 => CRITICAL)
 
-21 (FTP), 22 (SSH), 23 (Telnet), 25 (SMTP), 135 (RPC), 137 (NetBIOS), 138 (NetBIOS), 139 (NetBIOS), 445 (SMB), 1433 (MSSQL), 1434 (MSSQL), 1521 (Oracle), 2049 (NFS), 2181 (ZooKeeper), 2375 (Docker), 2376 (Docker), 2379 (etcd), 2380 (etcd), 3306 (MySQL), 3389 (RDP), 4505 (Salt), 4506 (Salt), 5432 (PostgreSQL), 5601 (Kibana), 5900 (VNC), 5984 (CouchDB), 5985 (WinRM), 5986 (WinRM), 6379 (Redis), 6443 (Kubernetes API), 7000 (Cassandra), 7001 (Cassandra), 8020 (HDFS), 8500 (Consul), 9000 (HDFS/MinIO), 9042 (Cassandra), 9092 (Kafka), 9200 (Elasticsearch), 9300 (Elasticsearch), 10250 (kubelet), 11211 (Memcached), 27017 (MongoDB), 27018 (MongoDB), 50070 (Hadoop)
+21 (FTP), 22 (secure shell), 23 (Telnet), 25 (SMTP), 135 (RPC), 137 (NetBIOS), 138 (NetBIOS), 139 (NetBIOS), 445 (SMB), 1433 (MSSQL), 1434 (MSSQL), 1521 (Oracle), 2049 (NFS), 2181 (ZooKeeper), 2375 (Docker), 2376 (Docker), 2379 (etcd), 2380 (etcd), 3306 (MySQL), 3389 (RDP), 4505 (Salt), 4506 (Salt), 5432 (PostgreSQL), 5601 (Kibana), 5900 (VNC), 5984 (CouchDB), 5985 (WinRM), 5986 (WinRM), 6379 (Redis), 6443 (Kubernetes API), 7000 (Cassandra), 7001 (Cassandra), 8020 (HDFS), 8500 (Consul), 9000 (HDFS/MinIO), 9042 (Cassandra), 9092 (Kafka), 9200 (Elasticsearch), 9300 (Elasticsearch), 10250 (kubelet), 11211 (Memcached), 27017 (MongoDB), 27018 (MongoDB), 50070 (Hadoop)
 
 Ports 80 and 443 alone are LOW (normal for an internet-facing endpoint); 3000, 8000, 8080, 8443, 8888 are HIGH (alternate web ports). ICMP alone is LOW. Any other port or a range of 100+ ports is HIGH. All ports / all protocols is CRITICAL.
 
