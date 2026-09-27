@@ -27,7 +27,7 @@ SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|gh
 # in a hook script: the here-document operator (spelled in two pieces so that this file does
 # not contain it), an inline interpreter program, or a string assembled around a variable
 HDOC_OP = "<" * 2
-HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php|awk)\s+(-[a-z]*[ceEf]|-|-v\s)(?=\s|$)", re.M)
+HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php|awk)\s+(-[a-z]*[ceEf](?=\s|$)|-(?=\s|$)|-v\s)", re.M)
 MIXED_QUOTE_VAR = re.compile(r"""'"\$[A-Za-z_{]|"'"\$[A-Za-z_{]""")
 HOOK_EVENTS = {"PreToolUse", "PostToolUse", "Stop", "SubagentStop", "SessionStart", "SessionEnd",
                "UserPromptSubmit", "PreCompact", "Notification", "PermissionRequest", "PostToolUseFailure",
