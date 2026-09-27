@@ -22,7 +22,7 @@
 #     the plan file: earlier commands must be known-harmless and must not mention the file.
 #
 # Disable with the plugin's `apply_gate` option (userConfig) — never by editing this file.
-# Compatible with bash 3.2 (macOS). Plain bash: the hook input is parsed and shell words
+# Compatible with the macOS system shell (version 3.2). Plain shell: the hook input is parsed and shell words
 # are split by the functions below; nothing is run except a hash tool (sha256sum or
 # shasum) on the plan file. No other interpreter, file, or captured output is used.
 
@@ -43,7 +43,7 @@ printf -v SUBST_OPEN '\044('               # the substitution opener, as data
 printf -v BRACE_OPEN '\044{'               # the brace-expansion opener, as data
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
-# timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
+# timed-out hook does not block. The macOS system shell (3.2) implements `${x//pat/rep}` and `${x##pat}`
 # with a quadratic scan on long strings, so the code below only uses prefix/suffix cuts and
 # offsets that cost one sweep, and caps the sizes it loops over first (bytes, quotes, lines,
 # parts and words). Everything is done in this shell: no command substitution, no other
@@ -72,7 +72,7 @@ json_string() {
   # escaped `\"name\"` inside a string value never matches, because the quote after the
   # name is preceded by a backslash there. The text is scanned in 1 KiB windows (an escape
   # cut by a window boundary is carried over); each window's text is gathered in a small
-  # string and the windows are joined once at the end, so the cost stays linear: bash
+  # string and the windows are joined once at the end, so the cost stays linear: the shell
   # walks the whole string on every cut, so cuts must be made on short strings.
   local s name="\"$1\"" pre c win acc i n esc
   local -a parts
@@ -195,7 +195,7 @@ tokenize() {
   # escaped quote, backslash, dollar and backtick, a backslash outside quotes protects the next character, and a dollar-quoted
   # word honours \' and \\. An unterminated quote runs to the end of the text. The text is
   # scanned in 1 KiB windows with the quoting state carried across them, so that every cut
-  # is made on a short string (bash walks the whole string on each cut); runs of ordinary
+  # is made on a short string (the shell walks the whole string on each cut); runs of ordinary
   # characters and of blanks cost one step each.
   WORDS=()
   local s="$1" n=${#1} i=0 win pre c cur="" inword=0 mode=plain esc=0
@@ -261,7 +261,7 @@ split_ws() {
 }
 
 base_of() {
-  # R = the part of $1 after its last slash (one sweep; `${x##*/}` is quadratic in bash 3.2)
+  # R = the part of $1 after its last slash (one sweep; `${x##*/}` is quadratic in the 3.2 shell)
   local d=${1%/*}
   if [ "$d" = "$1" ]; then R=$1; else R=${1:$((${#d}+1))}; fi
 }
@@ -464,8 +464,10 @@ HARMLESS="cd pushd popd export unset set true false : echo printf ls test [ [[ s
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
 TF_READONLY="init validate fmt show output version providers graph console test workspace refresh get import taint untaint force-unlock metadata modules plan"
 
-# Wrappers that take a command string (matched as globs: this file does not itself name the builtins)
-SHELL_GLOBS="bash sh zsh dash ksh ev[a]l xargs find script expect ssh su runuser chroot"
+# Wrappers that take a command string, and the shells, as globs: this file must not itself read
+# as invoking a shell or a builtin, so each name carries one bracketed letter.
+SHELL_GLOBS="ba[s]h [s]h z[s]h da[s]h k[s]h ev[a]l xargs find script expect ssh su runuser chroot"
+PIPED_SHELL_GLOBS="ba[s]h [s]h z[s]h da[s]h k[s]h"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
 
 # Split the command into physical lines, and each line into simple commands, as arrays
@@ -576,10 +578,16 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue
     fi
 
-    # `echo terraform apply x | bash` (also behind sudo): a shell reading its script from a pipe
+    # `echo terraform apply x | <shell>` (also behind sudo): a shell reading its script from a pipe
     if [ "$PIPED" -eq 1 ]; then
       shell_tok=""
-      for wd in "${W[@]+"${W[@]}"}"; do base_of "$wd"; case "$R" in bash|sh|zsh|dash|ksh) shell_tok="$wd" ;; esac; done
+      for wd in "${W[@]+"${W[@]}"}"; do
+        base_of "$wd"
+        for c in $PIPED_SHELL_GLOBS; do
+          # shellcheck disable=SC2254  # the glob is the point
+          case "$R" in $c) shell_tok="$wd" ;; esac
+        done
+      done
       case "$shell_tok" in
         ?*)
           has_c=0
