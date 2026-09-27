@@ -14,13 +14,14 @@ unset CLAUDE_PLUGIN_OPTION_APPLY_GATE
 mkdir -p "$TMP/infra"
 n_pass=0; n_fail=0; SLOWEST=0.00; SLOWEST_LABEL=""
 
+PY=$(command -v python3)
 run_hook() {
   # $1 = command, $2 = cwd -> prints "<decision> <seconds>". HOOK_PATH, when set, is the
-  # PATH the hook runs with (see the no-jq block).
+  # PATH the runner and the hook see (see the no-jq block).
   if [ -n "${HOOK_PATH:-}" ]; then
-    printf '%s' "$1" | python3 "$ROOT/tests/run_hook.py" "$HOOK" "$2" --path "$HOOK_PATH"
+    printf '%s' "$1" | PATH="$HOOK_PATH" "$PY" "$ROOT/tests/run_hook.py" "$HOOK" "$2"
   else
-    printf '%s' "$1" | python3 "$ROOT/tests/run_hook.py" "$HOOK" "$2"
+    printf '%s' "$1" | "$PY" "$ROOT/tests/run_hook.py" "$HOOK" "$2"
   fi
 }
 

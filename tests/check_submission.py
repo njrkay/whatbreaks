@@ -29,6 +29,7 @@ SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|gh
 HDOC_OP = "<" * 2
 HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php|awk)\s+(-[a-z]*[ceEf](?=\s|$)|-(?=\s|$)|-v\s)", re.M)
 MIXED_QUOTE_VAR = re.compile(r"""'"\$[A-Za-z_{]|"'"\$[A-Za-z_{]""")
+DOLLAR_QUOTE = re.compile(r"(?<!')\$'")
 HOOK_EVENTS = {"PreToolUse", "PostToolUse", "Stop", "SubagentStop", "SessionStart", "SessionEnd",
                "UserPromptSubmit", "PreCompact", "Notification", "PermissionRequest", "PostToolUseFailure",
                "TeammateIdle", "TaskCompleted", "MessageDisplay", "PreModelSwitch", "PostModelSwitch",
@@ -126,7 +127,9 @@ def main() -> int:
             if HOOK_INLINE.search(code):
                 problems.append(f"{r}: inline interpreter program in a hook script (held for review)")
             if MIXED_QUOTE_VAR.search(code):
-                problems.append(f"{r}: a string assembled from quoted pieces and a variable (read as a command assembled at run time); write it as one $'...' string")
+                problems.append(f"{r}: a string assembled from quoted pieces and a variable (read as a command assembled at run time); build it with printf -v")
+            if DOLLAR_QUOTE.search(code):
+                problems.append(f"{r}: dollar-quoted string (the validator's parser does not know it and reads a stray $); build the value with printf -v")
 
     # icon
     if not any(os.path.isfile(os.path.join(ROOT, ".claude-plugin", f"icon.{e}")) for e in ("svg", "png")):

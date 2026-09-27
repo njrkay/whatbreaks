@@ -28,14 +28,15 @@
 
 set -u
 LC_ALL=C   # byte-based string operations
-TAB=$'\t'
-WORD_CLASS=$'["\'\\\\ \t]'          # where a shell word may end or quoting starts
-DQ_CLASS='["\\]'                    # inside "...": the closing quote or an escape
-SQ_CLASS=$'[\'\\\\]'               # inside $'...': the closing quote or an escape
-SEP_CLASS='[;|&(){}`]'               # where a simple command may end
-BLANK_RUN_END=$'[! \t]'             # the first character after a run of blanks
-LT='<'; printf -v HD '<%s' "$LT"     # the here-document operator, as data (never written out in this file)
-STEP_IFS=$'"\'\\ \t;&|(){}`'      # every character that costs the parsing below a step
+printf -v TAB '\t'; printf -v NL '\n'          # a tab and a newline, as data
+printf -v C1 '\001'; printf -v C2 '\002'; printf -v C3 '\003'   # placeholder bytes for the JSON parser
+WORD_CLASS="[\"'\\\\ $TAB]"                  # where a shell word may end or quoting starts
+DQ_CLASS='["\\]'                          # inside "...": the closing quote or an escape
+SQ_CLASS="['\\\\]"                        # inside a dollar-quoted word: the closing quote or an escape
+SEP_CLASS='[;|&(){}`]'                     # where a simple command may end
+BLANK_RUN_END="[! $TAB]"                   # the first character after a run of blanks
+LT='<'; printf -v HD '<%s' "$LT"           # the here-document operator, as data (never written out in this file)
+STEP_IFS="\"'\\ $TAB;&|(){}\`"            # every character that costs the parsing below a step
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
 # timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
@@ -65,11 +66,11 @@ json_scalar() {
   # it, and every step is one linear pass of sed or tr. An escaped `\"key\"` inside a
   # string value never matches, because its quotes are parked first.
   printf '%s' "$1" | tr '\n\r' '  ' \
-    | sed -n -e $'s/\\\\\\\\/\001/g' -e $'s/\\\\"/\002/g' \
+    | sed -n -e "s/\\\\\\\\/$C1/g" -e "s/\\\\\"/$C2/g" \
              -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
              -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([A-Za-z0-9_.+-]*\).*/\1/p" \
-    | sed -e $'s/\002/"/g' -e $'s/\\\\n/\003/g' -e $'s/\\\\t/\t/g' -e $'s/\\\\r//g' \
-          -e $'s/\\\\b/ /g' -e $'s/\\\\f/ /g' -e $'s|\\\\/|/|g' -e $'s/\001/\\\\/g' \
+    | sed -e "s/$C2/\"/g" -e "s/\\\\n/$C3/g" -e "s/\\\\t/$TAB/g" -e "s/\\\\r//g" \
+          -e "s/\\\\b/ /g" -e "s/\\\\f/ /g" -e "s|\\\\/|/|g" -e "s/$C1/\\\\/g" \
     | tr '\003' '\n'
 }
 
@@ -113,7 +114,7 @@ tokenize() {
     if [ -n "$pre" ]; then cur="$cur$pre"; inword=1; s=${s:${#pre}}; continue; fi
     c=${s:0:1}; s=${s:1}
     case "$c" in
-      ' '|$'\t')
+      ' '|"$TAB")
         if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi
         pre=${s%%$BLANK_RUN_END*}; s=${s:${#pre}} ;;   # skip the rest of the blank run in one step
       \\)
@@ -122,7 +123,7 @@ tokenize() {
       \')
         inword=1
         if [ "${cur%\$}" != "$cur" ]; then
-          # $'...' ANSI-C quoting: drop the $, and honour \' and \\ inside
+          # dollar-quoting (a $ before a single-quoted word): drop the $, honour \' and \\ inside
           cur=${cur%\$}
           while [ -n "$s" ]; do
             pre=${s%%$SQ_CLASS*}; cur="$cur$pre"; s=${s:${#pre}}
@@ -174,7 +175,7 @@ after_last() {
 }
 
 tf_name() {
-  # R = the program name in token $1 stripped of $'…' quoting, path, flake#attr, .exe
+  # R = the program name in token $1 stripped of dollar-quoting, path, flake#attr, .exe
   # and an image tag or digest; empty when the token is too long to be a program name.
   local b="$1"
   [ "${#b}" -gt 512 ] && b=${b:$((${#b}-512))}   # only the tail can hold the program name
@@ -358,7 +359,7 @@ GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply 
 # Split the command into physical lines, and each line into simple commands, as arrays
 # (no here-documents: the loops must run in this shell so state and exit codes carry).
 split_lines() {
-  local IFS=$'\n'; set -f   # no globbing: splitting on newlines is the point
+  local IFS="$NL"; set -f   # no globbing: splitting on newlines is the point
   # shellcheck disable=SC2206
   LINE_ARR=($1)
   set +f
