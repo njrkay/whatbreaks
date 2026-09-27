@@ -29,7 +29,11 @@ expect() {
   local got line
   line=$(run_hook "$2" "$3"); got=${line% *}; LAST_SECS=${line##* }
   if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s %5ss  %s\n' "$1" "$LAST_SECS" "$4"
-  else n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "${2:0:300}"; fi
+  else
+    n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "${2:0:300}"
+    # surface failures as annotations in GitHub Actions, where the log itself may be hard to reach
+    [ -n "${GITHUB_ACTIONS:-}" ] && printf '::error title=apply-gate scenario::want %s got %s (%ss): %s -- %s\n' "$1" "$got" "$LAST_SECS" "$4" "$(printf '%s' "${2:0:200}" | tr '\n%' ' ~')"
+  fi
   # the hook must stay far inside its 30 s timeout on every input (a timed-out hook allows)
   if [ "${LAST_SECS%.*}" -ge 8 ]; then n_fail=$((n_fail+1)); printf 'FAIL  %ss is too slow for the hook timeout  %s\n' "$LAST_SECS" "$4"; fi
   if [ "${LAST_SECS%.*}" -gt "${SLOWEST%.*}" ] || { [ "${LAST_SECS%.*}" -eq "${SLOWEST%.*}" ] && [ "${LAST_SECS#*.}" -gt "${SLOWEST#*.}" ]; }; then SLOWEST=$LAST_SECS; SLOWEST_LABEL=$4; fi
@@ -290,6 +294,7 @@ rm -rf "$FB"
 
 echo
 echo "slowest scenario: ${SLOWEST}s (${SLOWEST_LABEL})"
+[ -n "${GITHUB_ACTIONS:-}" ] && printf '::notice title=apply-gate timing::%s passed, %s failed; slowest %ss (%s); bash %s\n' "$n_pass" "$n_fail" "$SLOWEST" "$SLOWEST_LABEL" "$BASH_VERSION"
 echo
 echo "$n_pass passed, $n_fail failed"
 [ "$n_fail" -eq 0 ]
