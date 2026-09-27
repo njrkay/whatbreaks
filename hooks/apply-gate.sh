@@ -27,12 +27,20 @@
 # tokenizer below. No other interpreter or file is run.
 
 set -u
-LC_ALL=C   # byte-based string operations keep the tokenizer's cost linear on long commands
+LC_ALL=C   # byte-based string operations
 TAB=$'\t'
-WORD_CLASS='["'\''\\ '"$TAB"']'          # where a shell word may end or quoting starts
-DQ_CLASS='["\\]'                          # inside "...": the closing quote or an escape
-SQ_CLASS="['\\\\]"                        # inside $'...': the closing quote or an escape
-STEP_CLASS='[^"'\''\\ '"$TAB"';&|()`]'   # every character that costs the parsing below a step
+WORD_CLASS='["'\''\\ '"$TAB"']'   # where a shell word may end or quoting starts
+DQ_CLASS='["\\]'                   # inside "...": the closing quote or an escape
+SQ_CLASS="['\\\\]"                 # inside $'...': the closing quote or an escape
+SEP_CLASS='[;|&(){}`]'              # where a simple command may end
+BLANK_RUN_END='[! '"$TAB"']'        # the first character after a run of blanks
+STEP_IFS=$'"\'\\ \t;&|(){}`'      # every character that costs the parsing below a step
+
+# Cost discipline: the hook must finish well inside its timeout on every input, because a
+# timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
+# with a quadratic scan on long strings, so whole-command text work goes through tr/awk
+# (linear) and the bash below only uses prefix/suffix cuts and offsets that cost one pass.
+# The sizes it loops over are capped first (bytes, lines, parts, and words).
 
 # ---------------------------------------------------------------- output helpers
 deny() {
@@ -48,34 +56,38 @@ deny() {
 allow() { exit 0; }
 
 json_scalar() {
-  # $1 = JSON text, $2 = key. Prints the value of the first `"key": value` pair: a string
-  # with its escapes decoded, or a bare scalar (true, false, null, a number). Prints
-  # nothing when the key is absent or its value is an object or array. An escaped
-  # `\"key\"` inside a string value never matches, because the quote after the name is
-  # preceded by a backslash there. Every step is one pass over the text, so the cost is
-  # linear in its length. \001 and \002 stand in for escapes while the closing quote is
-  # found; JSON cannot contain those bytes unescaped. (Patterns live in variables: there a
-  # doubled backslash matches one literal backslash.)
-  local s="$1" key="\"$2\"" val
-  local bs2='\\\\' bsq='\\"' bsn='\\n' bst='\\t' bsr='\\r' bsb='\\b' bsf='\\f' bsl='\\/'
-  case "$s" in *"$key"*) ;; *) return 0 ;; esac
-  s=${s#*"$key"}
-  s=${s#"${s%%[![:space:]]*}"}
-  [ "${s:0:1}" = ":" ] || return 0
-  s=${s#:}; s=${s#"${s%%[![:space:]]*}"}
-  if [ "${s:0:1}" != '"' ]; then
-    printf '%s' "${s%%[!A-Za-z0-9_.+-]*}"
-    return 0
-  fi
-  s=${s#\"}
-  s=${s//$bs2/$'\001'}
-  s=${s//$bsq/$'\002'}
-  val=${s%%\"*}
-  val=${val//$'\002'/\"}
-  val=${val//$bsn/$'\n'}; val=${val//$bst/$'\t'}; val=${val//$bsr/}
-  val=${val//$bsb/ }; val=${val//$bsf/ }; val=${val//$bsl/\/}
-  val=${val//$'\001'/\\}
-  printf '%s' "$val"
+  # $1 = JSON text, $2 = key. Prints the value of the first `"key": value` pair (the key
+  # followed by a colon; an escaped `\"key\"` inside a string value never qualifies): a
+  # string with its escapes decoded, or a bare scalar (true, false, null, a number).
+  # Prints nothing when the key is absent or its value is an object or array. \001 and
+  # \002 stand in for escapes while the closing quote is found; JSON cannot contain
+  # those bytes unescaped. awk keeps this linear on large inputs.
+  printf '%s' "$1" | LC_ALL=C awk -v key="$2" '
+    BEGIN { RS = "\001" }
+    NR == 1 {
+      s = $0; q = "\"" key "\""; pos = 1
+      while (1) {
+        i = index(substr(s, pos), q)
+        if (i == 0) exit
+        t = substr(s, pos + i - 1 + length(q))
+        if (match(t, /^[ \t\r\n]*:/)) { s = substr(t, RLENGTH + 1); break }
+        pos = pos + i
+      }
+      sub(/^[ \t\r\n]*/, "", s)
+      if (substr(s, 1, 1) != "\"") {
+        match(s, /^[A-Za-z0-9_.+-]*/); printf "%s", substr(s, 1, RLENGTH); exit
+      }
+      s = substr(s, 2)
+      gsub(/\\\\/, "\001", s)
+      gsub(/\\"/, "\002", s)
+      i = index(s, "\""); if (i > 0) s = substr(s, 1, i - 1)
+      gsub(/\002/, "\"", s)
+      gsub(/\\n/, "\n", s); gsub(/\\t/, "\t", s); gsub(/\\r/, "", s)
+      gsub(/\\b/, " ", s); gsub(/\\f/, " ", s); gsub(/\\\//, "/", s)
+      n = split(s, parts, "\001")
+      for (k = 1; k <= n; k++) { if (k > 1) printf "%s", "\\"; printf "%s", parts[k] }
+      exit
+    }'
 }
 
 json_field() {
@@ -119,7 +131,8 @@ tokenize() {
     c=${s:0:1}; s=${s:1}
     case "$c" in
       ' '|$'\t')
-        if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi ;;
+        if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi
+        pre=${s%%$BLANK_RUN_END*}; s=${s:${#pre}} ;;   # skip the rest of the blank run in one step
       \\)
         if [ -n "$s" ]; then cur="$cur${s:0:1}"; s=${s:1}; fi
         inword=1 ;;
@@ -165,12 +178,87 @@ split_ws() {
   set +f
 }
 
-is_tf_binary() {
+base_of() {
+  # R = the part of $1 after its last slash (one pass; `${x##*/}` is quadratic in bash 3.2)
+  local d=${1%/*}
+  if [ "$d" = "$1" ]; then R=$1; else R=${1:$((${#d}+1))}; fi
+}
+
+after_last() {
+  # $1 = character, $2 = text -> R = the part of $2 after the last $1, or all of it
+  local d=${2%"$1"*}
+  if [ "$d" = "$2" ]; then R=$2; else R=${2:$((${#d}+1))}; fi
+}
+
+tf_name() {
+  # R = the program name in token $1 stripped of $'…' quoting, path, flake#attr, .exe
+  # and an image tag or digest; empty when the token is too long to be a program name.
   local b="$1"
+  [ "${#b}" -gt 512 ] && b=${b:$((${#b}-512))}   # only the tail can hold the program name
   b=${b#\$}
-  b=${b##*/}; b=${b##*#}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip $'…', path, flake#attr, .exe, image tag/digest
-  case "$b" in terraform|tofu|opentofu|terragrunt|tf|tfenv|tgenv|tofuenv|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
+  base_of "$b"; b=$R
+  if [ "${#b}" -gt 256 ]; then R=""; return 0; fi    # not a program name
+  after_last '#' "$b"; b=$R
+  b=${b%.exe}; b=${b%%:*}; b=${b%%@*}
+  R=$b
+}
+
+is_tf_binary() {
+  tf_name "$1"
+  case "$R" in terraform|tofu|opentofu|terragrunt|tf|tfenv|tgenv|tofuenv|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
   return 1
+}
+
+count_steps() {
+  # R = how many quotes, backslashes, blank runs and separators $1 holds (one pass)
+  local IFS="$STEP_IFS"
+  set -f
+  # shellcheck disable=SC2086
+  set -- $1
+  set +f
+  R=$#
+}
+
+blank() { [ "$1" = ' ' ] || [ "$1" = "$TAB" ]; }
+
+emit() {
+  # used by split_segments: push the pending segment (with its marker) onto SEG_ARR
+  if [ -n "$mark$seg" ]; then SEG_ARR+=("$mark$seg"); fi
+  seg=""; mark=""
+  if [ $((SEGCOUNT + ${#SEG_ARR[@]})) -gt 300 ]; then
+    deny "whatbreaks: command has too many parts ($((SEGCOUNT + ${#SEG_ARR[@]}))) to gate safely; run the terraform step on its own."
+  fi
+}
+
+split_segments() {
+  # Cut line $1 into simple commands: SEG_ARR. A segment that follows `|` is marked
+  # @PIPE@, one that starts a `$(` or backtick substitution @SUBST@, and the text after a
+  # `)` @TAIL@. `>&`, `<&` and `&>` are redirections, not separators; `{`/`}` only
+  # separate as words. One pass: each cut is a prefix operation plus an offset.
+  SEG_ARR=()
+  local rest="$1" seg="" mark="" pre c1 c2 prev
+  while :; do
+    pre=${rest%%$SEP_CLASS*}
+    seg="$seg$pre"
+    rest=${rest:${#pre}}
+    [ -z "$rest" ] && break
+    c1=${rest:0:1}; c2=${rest:1:1}
+    if [ -n "$seg" ]; then prev=${seg:$((${#seg}-1)):1}; else prev=""; fi
+    case "$c1" in
+      ';') emit; rest=${rest:1} ;;
+      '|') if [ "$c2" = '|' ]; then emit; rest=${rest:2}; else emit; mark="@PIPE@ "; rest=${rest:1}; fi ;;
+      '&')
+        if [ "$c2" = '&' ]; then emit; rest=${rest:2}
+        elif [ "$prev" = '>' ] || [ "$prev" = '<' ] || [ "$c2" = '>' ]; then seg="$seg&"; rest=${rest:1}
+        else emit; rest=${rest:1}; fi ;;
+      '(') if [ "$prev" = '$' ]; then seg=${seg%\$}; emit; mark="@SUBST@ "; else emit; fi; rest=${rest:1} ;;
+      ')') emit; mark="@TAIL@ "; rest=${rest:1} ;;
+      '`') emit; mark="@SUBST@ "; rest=${rest:1} ;;
+      '{') if blank "$prev" && { [ -z "$c2" ] || blank "$c2"; }; then emit; else seg="$seg{"; fi; rest=${rest:1} ;;
+      '}') if blank "$prev"; then emit; else seg="$seg}"; fi; rest=${rest:1} ;;
+    esac
+  done
+  emit
 }
 
 record_earlier() {
@@ -181,15 +269,15 @@ record_earlier() {
   for tok in "$@"; do
     if [ "$expect_target" -eq 1 ]; then
       expect_target=0
-      case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*) ;; *) REDIRECT_TARGETS="$REDIRECT_TARGETS${tok##*/} " ;; esac
+      case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*) ;; *) base_of "$tok"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac
       continue
     fi
     case "$tok" in
       \>|\>\>|[0-9]\>|[0-9]\>\>|\&\>|\&\>\>) expect_target=1 ;;
       \>*|[0-9]\>*|\&\>*)
         tok=${tok#\&}; tok=${tok#[0-9]}; tok=${tok#\>}; tok=${tok#\>}
-        case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*|"") ;; *) REDIRECT_TARGETS="$REDIRECT_TARGETS${tok##*/} " ;; esac ;;
-      *) [ "$mention" -eq 1 ] && EARLIER_BASENAMES="$EARLIER_BASENAMES${tok##*/} " ;;
+        case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*|"") ;; *) base_of "$tok"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac ;;
+      *) if [ "$mention" -eq 1 ]; then base_of "$tok"; EARLIER_BASENAMES="$EARLIER_BASENAMES$R "; fi ;;
     esac
   done
 }
@@ -219,7 +307,7 @@ if [ -z "$CMD" ]; then
 fi
 
 # Fast path on a de-quoted copy, so terr""aform or terra\form cannot slip past it.
-FAST=${CMD//\"/}; FAST=${FAST//\'/}; FAST=${FAST//\\/}
+FAST=$(printf '%s' "$CMD" | tr -d '"'"'"'\\')
 FASTN=" $(printf '%s' "$FAST" | tr ';&|(){}\n\t' '         ') "
 case "$FASTN" in
   *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*|*' tf '*) ;;
@@ -292,12 +380,6 @@ split_lines() {
   LINE_ARR=($1)
   set +f
 }
-split_segs() {
-  local IFS=$'\n'; set -f
-  # shellcheck disable=SC2206
-  SEG_ARR=($1)
-  set +f
-}
 
 LINE_ARR=()
 split_lines "$LINES"
@@ -307,7 +389,7 @@ fi
 for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- here-document bodies are data; skip them until the terminator line
   if [ -n "$HEREDOC_END" ]; then
-    t="$LINE"; t=${t#"${t%%[![:space:]]*}"}; t=${t%"${t##*[![:space:]]}"}
+    t="$LINE"; lead=${t%%[![:space:]]*}; t=${t:${#lead}}
     [ "$t" = "$HEREDOC_END" ] && HEREDOC_END=""
     continue
   fi
@@ -317,9 +399,9 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- bound the work below: every quote, blank, backslash and separator costs the
   # tokenizer or the segment loop a step, and a line made of thousands of them would take
   # longer than the hook timeout (a timed-out hook does not block).
-  sp=${LINE//$STEP_CLASS/}
-  SPECIALS=$((SPECIALS + ${#sp}))
-  if [ "$SPECIALS" -gt 6000 ]; then
+  count_steps "$LINE"
+  SPECIALS=$((SPECIALS + R))
+  if [ "$SPECIALS" -gt 4000 ]; then
     deny "whatbreaks: command has too many words, quotes or parts ($SPECIALS) to gate safely; run the terraform step on its own."
   fi
   # ---- heredoc start, detected on tokens so that a quoted "a<<b" does not count
@@ -342,27 +424,8 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   LINE_COMPUTED=0
   case "$LINE" in *'$('*|*'`'*|*'${'*) LINE_COMPUTED=1 ;; esac
 
-  SEGS=" $LINE"
-  SEGS=${SEGS//'>&'/'>@AMP@'}; SEGS=${SEGS//'<&'/'<@AMP@'}; SEGS=${SEGS//'&>'/'@AMP@>'}
-  SEGS=${SEGS//'||'/$'\n'}
-  SEGS=${SEGS//'&&'/$'\n'}
-  SEGS=${SEGS//';'/$'\n'}
-  SEGS=${SEGS//'|'/$'\n'@PIPE@ }
-  SEGS=${SEGS//'&'/$'\n'}
-  SEGS=${SEGS//'$('/$'\n'@SUBST@ }
-  SEGS=${SEGS//'`'/$'\n'@SUBST@ }
-  SEGS=${SEGS//'('/$'\n'}
-  SEGS=${SEGS//')'/$'\n'@TAIL@ }
-  SEGS=${SEGS//' { '/$'\n'}; SEGS=${SEGS//' {'$'\n'/$'\n'}
-  SEGS=${SEGS//' }'/$'\n'}
-  SEGS=${SEGS//'@AMP@'/'&'}
   SUBST_DEPTH=0; PRE_CLASS=""
-
-  SEG_ARR=()
-  split_segs "$SEGS"
-  if [ $((SEGCOUNT + ${#SEG_ARR[@]})) -gt 300 ]; then
-    deny "whatbreaks: command has too many parts ($((SEGCOUNT + ${#SEG_ARR[@]}))) to gate safely; run the terraform step on its own."
-  fi
+  split_segments " $LINE"
   for SEG in "${SEG_ARR[@]+"${SEG_ARR[@]}"}"; do
     SEGCOUNT=$((SEGCOUNT+1))
     PIPED=0; COMPUTED=0; INHERIT_TEXT=0
@@ -406,7 +469,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       break
     done
     if [ $i -ge "$N" ]; then LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue; fi
-    FIRST="${W[$i]}"; FIRSTBASE=${FIRST##*/}
+    FIRST="${W[$i]}"; base_of "$FIRST"; FIRSTBASE=$R
     if [ "$INHERIT_TEXT" -eq 1 ]; then LAST_CLASS="text"; PREV_SEG="$SEG"; continue; fi
 
     if [ "$FIRSTBASE" = "cd" ] || [ "$FIRSTBASE" = "pushd" ]; then
@@ -420,7 +483,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     # `echo terraform apply x | bash` (also behind sudo): a shell reading its script from a pipe
     if [ "$PIPED" -eq 1 ]; then
       shell_tok=""
-      for tok in "${W[@]+"${W[@]}"}"; do case "${tok##*/}" in bash|sh|zsh|dash|ksh) shell_tok="$tok" ;; esac; done
+      for tok in "${W[@]+"${W[@]}"}"; do base_of "$tok"; case "$R" in bash|sh|zsh|dash|ksh) shell_tok="$tok" ;; esac; done
       case "$shell_tok" in
         ?*)
           has_c=0
@@ -458,7 +521,8 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       done
       HAS_SHELL=0
       for tok in "${W[@]+"${W[@]}"}"; do
-        case " $SHELLS " in *" ${tok##*/} "*) HAS_SHELL=1 ;; esac
+        case "$tok" in */*) base_of "$tok" ;; *) R=$tok ;; esac
+        case " $SHELLS " in *" $R "*) HAS_SHELL=1 ;; esac
       done
       if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
         # Not found: re-split every token on whitespace so that a quoted "terraform apply x"
@@ -519,7 +583,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     fi
     LAST_CLASS="tf"
 
-    BIN="${W[$FOUND]}"; BIN=${BIN##*/}; BIN=${BIN%.exe}; BIN=${BIN%%:*}; BIN=${BIN%%@*}
+    tf_name "${W[$FOUND]}"; BIN=$R
     i=$((FOUND+1))
 
     CHDIR=""; SUB=""; RUNALL=0; HELP=0
@@ -535,7 +599,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
         run|stack|exec) i=$((i+1)) ;;
         *)
           if is_tf_binary "$t"; then
-            BIN=${t##*/}; BIN=${BIN%.exe}; BIN=${BIN%%:*}; BIN=${BIN%%@*}; i=$((i+1)); continue
+            tf_name "$t"; BIN=$R; i=$((i+1)); continue
           fi
           SUB="$t"; i=$((i+1)); break ;;
       esac
@@ -610,7 +674,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     # Anything earlier on the same line that is not known-harmless, ran `plan`, or mentioned
     # this file by name could have rewritten it: the hash checked now may not be what
     # terraform reads.
-    PLANBASE=${PLANFILE##*/}
+    base_of "$PLANFILE"; PLANBASE=$R
     case "$EARLIER_BASENAMES" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
     case "$REDIRECT_TARGETS" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
     if [ "$SAW_PLAN_SUBCMD" -eq 1 ] || [ "$SAW_UNSAFE" -eq 1 ] || [ "$UNRESOLVED_REDIRECT" -eq 1 ]; then

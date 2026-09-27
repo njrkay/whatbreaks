@@ -12,31 +12,27 @@ export CLAUDE_PLUGIN_DATA="$TMP/data"
 export CLAUDE_PLUGIN_ROOT="$ROOT"
 unset CLAUDE_PLUGIN_OPTION_APPLY_GATE
 mkdir -p "$TMP/infra"
-n_pass=0; n_fail=0
+n_pass=0; n_fail=0; SLOWEST=0.00; SLOWEST_LABEL=""
 
 run_hook() {
-  # $1 = command, $2 = cwd -> prints "deny" or "allow"
-  local cmd=$1 cwd=$2 out
-  local rc
-  out=$(printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":%s,"tool_input":{"command":%s}}' \
-        "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cwd")" \
-        "$(printf '%s' "$cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" | bash "$HOOK" 2>/dev/null); rc=$?
-  if [ -n "$out" ]; then
-    if ! printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["permissionDecision"]=="deny"' 2>/dev/null; then
-      echo "invalid-json:$out"; return
-    fi
-    [ "$rc" -eq 2 ] && echo deny || echo "deny-but-exit-$rc"
+  # $1 = command, $2 = cwd -> prints "<decision> <seconds>". HOOK_PATH, when set, is the
+  # PATH the hook runs with (see the no-jq block).
+  if [ -n "${HOOK_PATH:-}" ]; then
+    printf '%s' "$1" | python3 "$ROOT/tests/run_hook.py" "$HOOK" "$2" --path "$HOOK_PATH"
   else
-    [ "$rc" -eq 0 ] && echo allow || echo "allow-but-exit-$rc"
+    printf '%s' "$1" | python3 "$ROOT/tests/run_hook.py" "$HOOK" "$2"
   fi
 }
 
 expect() {
   # $1 = expected, $2 = command, $3 = cwd, $4 = label
-  local got
-  got=$(run_hook "$2" "$3")
-  if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s %s\n' "$1" "$4"
-  else n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "$2"; fi
+  local got line
+  line=$(run_hook "$2" "$3"); got=${line% *}; LAST_SECS=${line##* }
+  if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s %5ss  %s\n' "$1" "$LAST_SECS" "$4"
+  else n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "${2:0:300}"; fi
+  # the hook must stay far inside its 30 s timeout on every input (a timed-out hook allows)
+  if [ "${LAST_SECS%.*}" -ge 8 ]; then n_fail=$((n_fail+1)); printf 'FAIL  %ss is too slow for the hook timeout  %s\n' "$LAST_SECS" "$4"; fi
+  if [ "${LAST_SECS%.*}" -gt "${SLOWEST%.*}" ] || { [ "${LAST_SECS%.*}" -eq "${SLOWEST%.*}" ] && [ "${LAST_SECS#*.}" -gt "${SLOWEST#*.}" ]; }; then SLOWEST=$LAST_SECS; SLOWEST_LABEL=$4; fi
 }
 
 # --- unrelated / read-only commands pass through
@@ -218,7 +214,9 @@ expect deny 'nix run nixpkgs#terraform -- apply tfplan' "$TMP/infra" "flake attr
 expect deny 'nix shell nixpkgs#opentofu -c tofu apply tfplan' "$TMP/infra" "nix shell then tofu apply"
 # size guards: a command the hook could not finish parsing in time must deny, not time out (a timed-out hook allows)
 expect deny "$(yes 'true;' | head -n 400 | tr -d '\n') terraform \$(echo ap)ply tfplan" "$TMP/infra" "hundreds of parts, computed subcommand"
-expect deny "echo $(yes '"a"' | head -n 2100 | tr '\n' ' ')&& terraform \$(echo ap)ply tfplan" "$TMP/infra" "thousands of quoted words, computed subcommand"
+expect deny "echo $(yes '"a"' | head -n 1400 | tr '\n' ' ')&& terraform \$(echo ap)ply tfplan" "$TMP/infra" "thousands of quoted words, computed subcommand"
+expect deny "echo $(yes 'a' | head -n 3900 | tr '\n' ' ')&& terraform apply tfplan" "$TMP/infra" "thousands of plain words under the cap, unreviewed apply"
+expect deny "$(printf '/'; head -c 4000 /dev/zero | tr '\0' a; printf '/terraform apply tfplan')" "$TMP/infra" "very long path to the binary"
 expect deny "$(yes 'true' | head -n 2100)
 terraform \$(echo ap)ply tfplan" "$TMP/infra" "thousands of lines, computed subcommand"
 expect deny "echo $(head -c 140000 /dev/zero | tr '\0' a) && terraform \$(echo ap)ply tfplan" "$TMP/infra" "over the byte cap, computed subcommand"
@@ -269,30 +267,29 @@ else n_fail=$((n_fail+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
 # ===== without jq the hook parses its JSON input and the marker files itself: same decisions
 FB=$(mktemp -d)
 for b in bash sh sed tr awk cat head shasum sha256sum pwd printf mktemp; do p=$(command -v "$b" 2>/dev/null) && ln -s "$p" "$FB/$b"; done
-nojq() {
-  # $1 = expected, $2 = JSON-escaped command, $3 = cwd, $4 = label
-  local out rc got
-  out=$(printf '{"cwd":"%s","tool_input":{"command":"%s"},"tool_name":"Bash"}' "$3" "$2" | PATH="$FB" bash "$HOOK" 2>/dev/null); rc=$?
-  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q '"deny"'; then got=deny; elif [ "$rc" -eq 0 ] && [ -z "$out" ]; then got=allow; else got="rc=$rc out=$out"; fi
-  if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s no-jq: %s\n' "$1" "$4"; else n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  no-jq: %s\n' "$1" "$got" "$4"; fi
-}
 cp "$ROOT/evals/clean-plan/resources/plan.json" "$TMP/infra/ok2.tfplan"
 python3 "$ANALYZER" "$TMP/infra/ok2.tfplan" --plan-file "$TMP/infra/ok2.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
-nojq deny  'echo \"x\"; terraform apply -auto-approve' "$TMP" "auto-approve with escaped quotes in the JSON"
-nojq allow 'ls -la' "$TMP" "unrelated command"
-nojq allow 'terraform apply ok2.tfplan' "$TMP/infra" "reviewed plan read from the marker"
-nojq deny  'terraform apply tfplan' "$TMP/infra" "unreviewed plan"
-nojq allow 'cat > README.md <<EOF\nterraform apply -auto-approve\nEOF\nterraform apply ok2.tfplan' "$TMP/infra" "newline escapes and a heredoc body"
 python3 "$ANALYZER" "$ROOT/evals/destroy-plan/resources/plan.json" --plan-file "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
-nojq deny  'terraform apply block.tfplan' "$TMP/infra" "BLOCK verdict read from the marker"
+HOOK_PATH="$FB"
+expect deny  'echo "x"; terraform apply -auto-approve' "$TMP" "no-jq: auto-approve with quotes in the command"
+expect allow 'ls -la' "$TMP" "no-jq: unrelated command"
+expect allow 'terraform apply ok2.tfplan' "$TMP/infra" "no-jq: reviewed plan read from the marker"
+expect deny  'terraform apply tfplan' "$TMP/infra" "no-jq: unreviewed plan"
+expect allow $'cat > README.md <<EOF\nterraform apply -auto-approve\nEOF\nterraform apply ok2.tfplan' "$TMP/infra" "no-jq: newlines and a heredoc body"
+expect deny  $'terraform apply\ttfplan' "$TMP/infra" "no-jq: tab between words"
+expect deny  'terraform apply we"ird.tfplan' "$TMP/infra" "no-jq: quote inside the command"
+expect deny  'terraform apply back\\slash.tfplan' "$TMP/infra" "no-jq: backslashes inside the command"
+expect deny  'terraform apply block.tfplan' "$TMP/infra" "no-jq: BLOCK verdict read from the marker"
 python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --reason "test" >/dev/null
-nojq allow 'terraform apply block.tfplan' "$TMP/infra" "approval read from the marker"
+expect allow 'terraform apply block.tfplan' "$TMP/infra" "no-jq: approval read from the marker"
 python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --revoke >/dev/null
-nojq deny  'terraform apply\ttfplan' "$TMP/infra" "tab escape between words"
-nojq deny  'terraform apply we\"ird.tfplan' "$TMP/infra" "escaped quote inside the command"
-nojq deny  'terraform apply back\\\\slash.tfplan' "$TMP/infra" "escaped backslash inside the command"
+expect deny  "echo $(yes 'a' | head -n 3900 | tr '\n' ' ')&& terraform apply tfplan" "$TMP/infra" "no-jq: thousands of plain words under the cap"
+expect deny  "$(yes 'true' | head -n 290; printf 'terraform apply tfplan')" "$TMP/infra" "no-jq: hundreds of lines"
+unset HOOK_PATH
 rm -rf "$FB"
 
+echo
+echo "slowest scenario: ${SLOWEST}s (${SLOWEST_LABEL})"
 echo
 echo "$n_pass passed, $n_fail failed"
 [ "$n_fail" -eq 0 ]

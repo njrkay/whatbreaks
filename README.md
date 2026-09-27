@@ -155,7 +155,7 @@ boundary.
   target, or an alias (`./deploy.sh`, `make apply`), and it does not gate `state push`/`state rm`,
   `import`, or `taint`. If your team applies through a wrapper, add a `PreToolUse` rule for it or
   rely on the review skill. A command too long or too fragmented to parse within the hook timeout
-  (over 128 KiB, 2,000 lines, 300 parts, or 6,000 words and quotes outside here-documents) is
+  (over 128 KiB, 2,000 lines, 300 parts, or 4,000 words and quotes outside here-documents) is
   denied rather than risked, since a timed-out hook does not block.
 - Terragrunt runs Terraform inside `.terragrunt-cache/…`, so give `-out` an absolute path; a
   relative plan file cannot be found by `--plan-file` or by the gate.
@@ -193,7 +193,7 @@ boundary.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fixtures.py   # 26 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh                                    # 178 apply-gate scenarios, including known bypass shapes
+bash tests/test_hook.sh                                    # 182 apply-gate scenarios, including known bypass shapes
 python3 tests/check_submission.py                          # the directory's pre-submission rules
 claude plugin validate .                                   # manifest and component checks
 ```
