@@ -144,7 +144,7 @@ boundary.
 
 ```bash
 python3 tests/test_fixtures.py   # 15 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh          # 36 apply-gate scenarios
+bash tests/test_hook.sh          # 40 apply-gate scenarios
 claude plugin validate .         # manifest and component checks
 claude plugin eval . --allow-tools "Bash(python3 *)"   # behavioural evals (uses your Claude credentials)
 ```

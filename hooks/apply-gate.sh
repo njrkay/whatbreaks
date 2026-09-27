@@ -19,9 +19,14 @@ set -u
 
 # ---------------------------------------------------------------- helpers
 deny() {
-  # $1 = reason (no double quotes or backslashes; \n sequences are kept as-is)
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
-  exit 0
+  # $1 = reason. Newlines are written as @NL@ in messages. The reason is JSON-escaped so that
+  # user-controlled text (a plan file name) can never produce invalid JSON, and the script
+  # exits 2, which blocks the tool call even if the JSON were somehow unreadable.
+  local reason
+  reason=$(printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/@NL@/\\n/g')
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
+  printf '%s\n' "$1" | sed 's/@NL@/ /g' >&2
+  exit 2
 }
 allow() { exit 0; }
 
@@ -87,7 +92,7 @@ CWD=$(json_field '.cwd' 'o.get("cwd")' 'cwd')
 [ -z "$CWD" ] && CWD=$(pwd)
 MARKER_DIR="${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/data/whatbreaks}/reviews"
 
-HOWTO='Run the plan and review it first:\n  terraform plan -out=tfplan\n  /whatbreaks:review tfplan\nthen apply that exact file: terraform apply tfplan. (If the review verdict is BLOCK, the user must explicitly accept the risk via /whatbreaks:approve tfplan.)'
+HOWTO='Run the plan and review it first:@NL@  terraform plan -out=tfplan@NL@  /whatbreaks:review tfplan@NL@then apply that exact file: terraform apply tfplan. (If the review verdict is BLOCK, the user must explicitly accept the risk via /whatbreaks:approve tfplan.)'
 
 # Env-var back doors that auto-approve or inject flags: treat like -auto-approve.
 case "$CMD" in
@@ -191,7 +196,7 @@ while IFS= read -r SEG; do
 
   if [ -z "$PLANFILE" ]; then
     if [ "$DESTROY" -eq 1 ]; then
-      deny "whatbreaks: $BIN destroy is blocked. Create a destroy plan instead:\n  $BIN plan -destroy -out=destroy.tfplan\n  /whatbreaks:review destroy.tfplan\nThe review verdict will be BLOCK (everything is destroyed), so the user must explicitly approve it with /whatbreaks:approve destroy.tfplan before $BIN apply destroy.tfplan is allowed."
+      deny "whatbreaks: $BIN destroy is blocked. Create a destroy plan instead:@NL@  $BIN plan -destroy -out=destroy.tfplan@NL@  /whatbreaks:review destroy.tfplan@NL@The review verdict will be BLOCK (everything is destroyed), so the user must explicitly approve it with /whatbreaks:approve destroy.tfplan before $BIN apply destroy.tfplan is allowed."
     fi
     if [ "$AUTO" -eq 1 ] || [ "$ENV_ARGS" -eq 1 ] || [ "$PIPED" -eq 1 ] || [ "$REDIRECT_IN" -eq 1 ]; then
       deny "whatbreaks: $BIN apply with -auto-approve (or piped/env-injected approval) but no saved plan file would apply whatever the current plan is, unreviewed. $HOWTO"

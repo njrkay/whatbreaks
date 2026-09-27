@@ -17,10 +17,18 @@ PASS=0; FAIL=0
 run_hook() {
   # $1 = command, $2 = cwd -> prints "deny" or "allow"
   local cmd=$1 cwd=$2 out
+  local rc
   out=$(printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":%s,"tool_input":{"command":%s}}' \
         "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cwd")" \
-        "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cmd")" | bash "$HOOK")
-  case "$out" in *'"deny"'*) echo deny ;; "") echo allow ;; *) echo "weird:$out" ;; esac
+        "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cmd")" | bash "$HOOK" 2>/dev/null); rc=$?
+  if [ -n "$out" ]; then
+    if ! printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["permissionDecision"]=="deny"' 2>/dev/null; then
+      echo "invalid-json:$out"; return
+    fi
+    [ "$rc" -eq 2 ] && echo deny || echo "deny-but-exit-$rc"
+  else
+    [ "$rc" -eq 0 ] && echo allow || echo "allow-but-exit-$rc"
+  fi
 }
 
 expect() {
@@ -89,6 +97,14 @@ if python3 "$APPROVE" "$TMP/infra/new.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/
   FAIL=$((FAIL+1)); echo "FAIL  approve accepted an unreviewed plan"
 else PASS=$((PASS+1)); echo "PASS  approve refuses unreviewed plan"; fi
 
+# --- hostile plan file names must still deny with valid JSON (an invalid JSON deny would be treated as non-blocking)
+printf 'x' > "$TMP/infra/we\"ird.tfplan"
+expect deny 'terraform apply we"ird.tfplan' "$TMP/infra" "double quote in plan file name"
+printf 'x' > "$TMP/infra/back\\slash.tfplan"
+expect deny 'terraform apply back\\slash.tfplan' "$TMP/infra" "backslash in plan file name"
+expect deny "terraform apply \$(printf 'a\\tb').tfplan" "$TMP/infra" "control characters via substitution"
+expect deny 'terraform apply -auto-approve "$(cat /etc/hostname)"' "$TMP/infra" "command substitution as plan file"
+
 # --- gate can be switched off by userConfig
 CLAUDE_PLUGIN_OPTION_APPLY_GATE=false
 export CLAUDE_PLUGIN_OPTION_APPLY_GATE
@@ -96,7 +112,7 @@ expect allow 'terraform apply -auto-approve' "$TMP/infra" "gate disabled via opt
 unset CLAUDE_PLUGIN_OPTION_APPLY_GATE
 
 # --- output is valid JSON when denying
-out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply -auto-approve"}}' "$TMP" | bash "$HOOK")
+out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply -auto-approve"}}' "$TMP" | bash "$HOOK" 2>/dev/null)
 if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["permissionDecision"]=="deny"'; then
   PASS=$((PASS+1)); echo "PASS  deny output is valid JSON"
 else FAIL=$((FAIL+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
