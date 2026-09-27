@@ -12,4 +12,4 @@ First release.
 - Deterministic analyzer (stdlib only) with destructive, safety, exposure, IAM, and plan-level rule
   families; rename detection; sensitive-value masking; local-account inference.
 - `redact_plan.py` for sharing plans safely.
-- 26 fixture plans with unit tests, 85 hook scenarios, 27 eval cases.
+- 26 fixture plans with unit tests, 122 hook scenarios, 27 eval cases.

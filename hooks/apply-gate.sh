@@ -15,8 +15,11 @@
 #     over-long command that mentions apply/destroy is a deny (exit 2), never an allow.
 #   * Never exit 0 from inside the per-command loop: a reviewed apply followed by an
 #     unreviewed one in the same line must still be denied.
-#   * The hash is only trusted when nothing earlier in the same command line could have
-#     (re)written the plan file.
+#   * A terraform binary is looked for anywhere in a simple command (wrappers, shells,
+#     docker images, ssh strings), not only in the first position; the only commands
+#     exempt from that scan are ones that merely print or search text.
+#   * The hash is trusted only when nothing earlier on the same line could have rewritten
+#     the plan file: earlier commands must be known-harmless and must not mention the file.
 #
 # Disable with the plugin's `apply_gate` option (userConfig) — never by editing this file.
 # Compatible with bash 3.2 (macOS). Uses jq or python3 for JSON when present and a
@@ -41,7 +44,7 @@ json_field() {
   # $1 = jq path, $2 = python expression on obj, $3 = key name for the sed fallback
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$INPUT" | jq -r "$1 // empty" 2>/dev/null
-  elif command -v python3 >/dev/null 2>&1; then
+  elif [ "$PY_OK" = 1 ]; then
     printf '%s' "$INPUT" | python3 -c 'import json,sys
 try:
     o=json.load(sys.stdin)
@@ -50,10 +53,11 @@ try:
 except Exception:
     pass' 2>/dev/null
   else
-    # BSD-safe regex (no GNU \| alternation); JSON \n becomes ";" so the splitter still
-    # sees separate commands.
-    printf '%s' "$INPUT" | tr '\n' ' ' | sed -n 's/.*"'"$3"'"[[:space:]]*:[[:space:]]*"\([^"]*\(\\"[^"]*\)*\)".*/\1/p' \
-      | sed -e 's/\\"/"/g' -e 's/\\n/;/g' -e 's/\\t/ /g' -e 's/\\\\/\\/g'
+    # BSD-safe BRE: protect escaped backslashes and quotes, cut the value, restore.
+    printf '%s' "$INPUT" | tr '\n' ' ' \
+      | sed -e 's/\\\\/@BS@/g' -e 's/\\"/@DQ@/g' \
+      | sed -n 's/.*"'"$3"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | sed -e 's/@DQ@/"/g' -e 's/\\n/;/g' -e 's/\\t/ /g' -e 's/\\r//g' -e 's/@BS@/\\/g'
   fi
 }
 
@@ -68,7 +72,7 @@ marker_field() {
   # $1 = marker file, $2 = key -> prints the value lowercased, or nothing
   if command -v jq >/dev/null 2>&1; then
     jq -r ".$2 // empty" "$1" 2>/dev/null | tr 'A-Z' 'a-z'
-  elif command -v python3 >/dev/null 2>&1; then
+  elif [ "$PY_OK" = 1 ]; then
     python3 -c 'import json,sys
 try:
     print(str(json.load(open(sys.argv[1])).get(sys.argv[2],"")).lower())
@@ -81,17 +85,44 @@ except Exception:
 
 unquote() {
   # Strip shell quoting from one token for matching purposes (expands nothing).
-  printf '%s' "$1" | sed -e "s/^\\\$'//" -e 's/["'"'"'\\]//g'
+  local t="$1"
+  t=${t#\$\'}
+  t=${t//\"/}; t=${t//\'/}; t=${t//\\/}
+  printf '%s' "$t"
 }
 
 is_tf_binary() {
-  local b="$1"; b=${b##*/}; b=${b%.exe}
-  case "$b" in terraform|tofu|opentofu|terragrunt|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
+  local b="$1"
+  b=${b##*/}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip path, .exe, image tag/digest
+  case "$b" in terraform|tofu|opentofu|terragrunt|tf|tfenv|tgenv|tofuenv|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
   return 1
+}
+
+record_earlier() {
+  # $1 = 1 when plain mentions of file names must be recorded (the command could write them),
+  # then the tokens. Redirect targets are always recorded; an unresolvable target is unsafe.
+  local mention="$1"; shift
+  local expect_target=0 tok
+  for tok in "$@"; do
+    if [ "$expect_target" -eq 1 ]; then
+      expect_target=0
+      case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*) ;; *) REDIRECT_TARGETS="$REDIRECT_TARGETS${tok##*/} " ;; esac
+      continue
+    fi
+    case "$tok" in
+      \>|\>\>|[0-9]\>|[0-9]\>\>|\&\>|\&\>\>) expect_target=1 ;;
+      \>*|[0-9]\>*|\&\>*)
+        tok=${tok#\&}; tok=${tok#[0-9]}; tok=${tok#\>}; tok=${tok#\>}
+        case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*|"") ;; *) REDIRECT_TARGETS="$REDIRECT_TARGETS${tok##*/} " ;; esac ;;
+      *) [ "$mention" -eq 1 ] && EARLIER_BASENAMES="$EARLIER_BASENAMES${tok##*/} " ;;
+    esac
+  done
 }
 
 # ---------------------------------------------------------------- input
 INPUT=$(cat)
+PY_OK=0
+if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then PY_OK=1; fi
 CMD=$(json_field '.tool_input.command' 'o.get("tool_input",{}).get("command")' 'command')
 
 # Fail closed if the payload looks terraform-ish but could not be parsed.
@@ -99,22 +130,23 @@ if [ -z "$CMD" ]; then
   case "$INPUT" in
     *terraform*|*tofu*|*terragrunt*)
       case "$INPUT" in
-        *apply*|*destroy*) deny "whatbreaks: could not parse the hook input (no jq or python3?), so refusing to gate blindly. Install jq or python3, or turn the gate off with the apply_gate option." ;;
+        *apply*|*destroy*) deny "whatbreaks: could not parse the hook input (no jq or working python3?), so refusing to gate blindly. Install jq or python3, or turn the gate off with the apply_gate option." ;;
       esac ;;
   esac
   allow
 fi
 
-# Fast path: nothing terraform-like in the command.
-case "$CMD" in
-  *terraform*|*tofu*|*terragrunt*) ;;
+# Fast path on a de-quoted copy, so terr""aform or terra\form cannot slip past it.
+FAST=${CMD//\"/}; FAST=${FAST//\'/}; FAST=${FAST//\\/}
+case "$FAST" in
+  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*|*' tf '*|'tf '*|*';tf '*) ;;
   *) allow ;;
 esac
 
-# A huge command could push the tokenizer past the hook timeout, and a timed-out hook does
-# not block. Refuse to gate it.
+# A huge or very fragmented command could push the tokenizer past the hook timeout, and a
+# timed-out hook does not block. Refuse to gate it.
 if [ "${#CMD}" -gt 131072 ]; then
-  case "$CMD" in *apply*|*destroy*) deny "whatbreaks: command is too long (${#CMD} bytes) to gate safely; split it up." ;; esac
+  case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command is too long (${#CMD} bytes) to gate safely; split it up." ;; esac
 fi
 
 # From here on any unexpected error must deny (exit 1 would be treated as non-blocking).
@@ -129,11 +161,8 @@ esac
 CWD=$(json_field '.cwd' 'o.get("cwd")' 'cwd')
 [ -z "$CWD" ] && CWD=$(pwd)
 HOME="${HOME:-/nonexistent}"
-if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
-  MARKER_DIR="$CLAUDE_PLUGIN_DATA/reviews"
-else
-  MARKER_DIR=""
-fi
+MARKER_DIR=""
+[ -n "${CLAUDE_PLUGIN_DATA:-}" ] && MARKER_DIR="$CLAUDE_PLUGIN_DATA/reviews"
 
 # Env-var back doors that auto-approve or inject flags: treated like -auto-approve.
 case "$CMD" in
@@ -142,234 +171,305 @@ case "$CMD" in
 esac
 
 # ---------------------------------------------------------------- split into simple commands
-CMD=${CMD//$'\\\n'/ }            # join backslash-newline continuations first
-SEGS=${CMD//'||'/$'\n'}
-SEGS=${SEGS//'&&'/$'\n'}
-SEGS=${SEGS//';'/$'\n'}
-SEGS=${SEGS//'|'/$'\n'@PIPE@ }
-SEGS=${SEGS//'&'/$'\n'}
-SEGS=${SEGS//'$('/$'\n'}
-SEGS=${SEGS//'`'/$'\n'}
-SEGS=${SEGS//'('/$'\n'}          # subshell
-SEGS=${SEGS//'{'/$'\n'}          # group
+# Physical lines first (heredoc bodies are line-based), then separators within a line.
+CMD=${CMD//$'\\\n'/ }            # join backslash-newline continuations
+SEGCOUNT=0
+LINES="$CMD"
 
 EFFECTIVE_CWD="$CWD"
-SAW_PLAN_SUBCMD=0   # an earlier command in this line ran `plan` (may have written the file)
-SAW_WRITER=0        # an earlier command in this line can (re)write files
-PREV_SEG=""         # previous simple command, for `echo terraform apply x | bash`
-HEREDOC_END=""      # inside a here-document body until this terminator line
+SAW_PLAN_SUBCMD=0   # an earlier command on this line ran `plan` (may have written the file)
+SAW_UNSAFE=0        # an earlier command on this line is not known to be harmless
+EARLIER_BASENAMES=" "   # basenames mentioned by earlier commands that could write them
+REDIRECT_TARGETS=" "    # basenames of redirect targets in earlier segments
+UNRESOLVED_REDIRECT=0   # an earlier redirect target that cannot be resolved (variable, glob)
+PREV_SEG=""
+HEREDOC_END=""
 
-while IFS= read -r SEG; do
-  # Skip here-document bodies: they are data, not commands.
+# Commands that only print, search, or edit text: a "terraform apply" inside their
+# arguments is data, not an invocation.
+TEXT_CONSUMERS="echo printf grep rg egrep fgrep git sed awk cat tee less more man head tail wc sort uniq cut tr vim vi nano code subl open pbcopy xclip diff comm"
+# Commands that cannot rewrite a plan file (given they do not mention it): safe to precede an apply.
+HARMLESS="cd pushd popd export unset set true false : echo printf ls pwd test [ [[ sleep date mkdir rm touch which type command hash whoami id uname clear history alias stat file du cmp md5sum sha256sum shasum"
+# Commands that may mention the plan file without changing it (they only read it).
+READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
+TF_READONLY="init validate fmt show output version providers graph console test login logout workspace refresh get import taint untaint force-unlock metadata modules plan"
+
+while IFS= read -r LINE; do
+  # ---- here-document bodies are data; skip them until the terminator line
   if [ -n "$HEREDOC_END" ]; then
-    trimmed=$(printf '%s' "$SEG" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-    [ "$trimmed" = "$HEREDOC_END" ] && HEREDOC_END=""
+    t="$LINE"; t=${t#"${t%%[![:space:]]*}"}; t=${t%"${t##*[![:space:]]}"}
+    [ "$t" = "$HEREDOC_END" ] && HEREDOC_END=""
     continue
   fi
-  case "$SEG" in
+  case "$LINE" in
     *'<<'*)
-      case "$SEG" in *'<<<'*) ;; *)
-        hd=$(printf '%s' "$SEG" | sed -n 's/.*<<-\{0,1\}[[:space:]]*["'"'"']\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | head -1)
+      case "$LINE" in *'<<<'*) ;; *)
+        hd=$(printf '%s' "$LINE" | sed -n 's/.*<<-\{0,1\}[[:space:]]*["'"'"']\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' | head -1)
         [ -n "$hd" ] && HEREDOC_END="$hd" ;;
       esac ;;
   esac
 
-  PIPED=0
-  case "$SEG" in @PIPE@*) PIPED=1; SEG=${SEG#@PIPE@} ;; esac
-  REDIRECT_IN=0
-  case "$SEG" in *'<'*) REDIRECT_IN=1 ;; esac
-  SEG_WRITES=0
-  case "$SEG" in *'>'*) SEG_WRITES=1 ;; esac
+  LINE_COMPUTED=0
+  case "$LINE" in *'$('*|*'`'*|*'${'*) LINE_COMPUTED=1 ;; esac
 
-  # Tokenize with quote awareness when python3 is present; otherwise whitespace + unquote.
-  W=()
-  if command -v python3 >/dev/null 2>&1; then
-    while IFS= read -r tok; do W+=("$tok"); done < <(printf '%s' "$SEG" | python3 -c 'import shlex,sys
+  SEGS=${LINE//'||'/$'\n'}
+  SEGS=${SEGS//'&&'/$'\n'}
+  SEGS=${SEGS//';'/$'\n'}
+  SEGS=${SEGS//'|'/$'\n'@PIPE@ }
+  SEGS=${SEGS//'&'/$'\n'}
+  SEGS=${SEGS//'$('/$'\n'@SUBST@ }
+  SEGS=${SEGS//'`'/$'\n'@SUBST@ }
+  SEGS=${SEGS//'('/$'\n'}
+  SEGS=${SEGS//')'/$'\n'}
+  SEGS=${SEGS//'{'/$'\n'}
+  SEGS=${SEGS//'}'/$'\n'}
+
+  while IFS= read -r SEG; do
+    SEGCOUNT=$((SEGCOUNT+1))
+    if [ "$SEGCOUNT" -gt 300 ]; then
+      case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command has too many parts ($SEGCOUNT) to gate safely; split it up." ;; esac
+    fi
+    PIPED=0; COMPUTED=0
+    case "$SEG" in @PIPE@*) PIPED=1; SEG=${SEG#@PIPE@} ;; esac
+    case "$SEG" in @SUBST@*) COMPUTED=1; SEG=${SEG#@SUBST@} ;; esac
+    case "$SEG" in *'$'*) COMPUTED=1 ;; esac
+    REDIRECT_IN=0
+    case "$SEG" in *'<'*) REDIRECT_IN=1 ;; esac
+
+    # ---- tokenize: shlex only when quoting is present (it costs a python start), else read -a
+    W=()
+    case "$SEG" in
+      *\"*|*\'*|*\\*)
+        if [ "$PY_OK" = 1 ]; then
+          while IFS= read -r tok; do W+=("$tok"); done < <(printf '%s' "$SEG" | python3 -c 'import shlex,sys
 s=sys.stdin.read()
 try:
-    toks=shlex.split(s, comments=True, posix=True)
+    toks=shlex.split(s, comments=False, posix=True)
 except ValueError:
     toks=s.split()
 for t in toks:
     print(t[:4096])' 2>/dev/null)
-  else
-    read -r -a RAW <<< "$SEG" || true
-    for tok in "${RAW[@]+"${RAW[@]}"}"; do W+=("$(unquote "${tok:0:4096}")"); done
-  fi
-  if [ "${#W[@]}" -eq 0 ]; then PREV_SEG="$SEG"; continue; fi
+        fi
+        if [ "${#W[@]}" -eq 0 ]; then
+          read -r -a RAW <<< "$SEG" || true
+          for tok in "${RAW[@]+"${RAW[@]}"}"; do W+=("$(unquote "${tok:0:4096}")"); done
+        fi ;;
+      *)
+        read -r -a RAW <<< "$SEG" || true
+        for tok in "${RAW[@]+"${RAW[@]}"}"; do W+=("${tok:0:4096}"); done ;;
+    esac
+    if [ "${#W[@]}" -eq 0 ]; then PREV_SEG="$SEG"; continue; fi
 
-  # `echo terraform apply x | bash`: a shell reading its script from a pipe.
-  if [ "$PIPED" -eq 1 ]; then
-    case "${W[0]}" in
-      bash|sh|zsh|dash|ksh)
-        has_c=0
-        for tok in "${W[@]+"${W[@]}"}"; do case "$tok" in -c|-*c*) has_c=1 ;; esac; done
-        if [ "$has_c" -eq 0 ]; then
-          case "$PREV_SEG" in
-            *terraform*|*tofu*|*terragrunt*)
+    # drop a trailing comment (a token that *starts* with #)
+    N=0
+    for tok in "${W[@]+"${W[@]}"}"; do
+      case "$tok" in \#*) break ;; esac
+      N=$((N+1))
+    done
+    [ "$N" -eq 0 ] && { PREV_SEG="$SEG"; continue; }
+
+    # ---- strip leading control words and env assignments, remember `cd`
+    i=0
+    while [ $i -lt "$N" ]; do
+      t="${W[$i]}"
+      case "$t" in
+        then|do|else|elif|'!'|if|while|until|fi|done|esac|in|case|for|select) i=$((i+1)); continue ;;
+        [A-Za-z_]*=*) i=$((i+1)); continue ;;
+      esac
+      break
+    done
+    if [ $i -ge "$N" ]; then PREV_SEG="$SEG"; continue; fi
+    FIRST="${W[$i]}"; FIRSTBASE=${FIRST##*/}
+
+    if [ "$FIRSTBASE" = "cd" ] || [ "$FIRSTBASE" = "pushd" ]; then
+      if [ $((i+1)) -lt "$N" ]; then
+        d="${W[$((i+1))]}"
+        case "$d" in /*) EFFECTIVE_CWD="$d" ;; "~"*) EFFECTIVE_CWD="$HOME${d#\~}" ;; *) EFFECTIVE_CWD="$EFFECTIVE_CWD/$d" ;; esac
+      fi
+      PREV_SEG="$SEG"; continue
+    fi
+
+    # `echo terraform apply x | bash`: a shell reading its script from a pipe
+    if [ "$PIPED" -eq 1 ]; then
+      case "$FIRSTBASE" in
+        bash|sh|zsh|dash|ksh)
+          has_c=0
+          for tok in "${W[@]+"${W[@]}"}"; do case "$tok" in -c|-*c*) has_c=1 ;; esac; done
+          if [ "$has_c" -eq 0 ]; then
+            case "$PREV_SEG" in *terraform*|*tofu*|*terragrunt*|*' tf '*|'tf '*)
               case "$PREV_SEG" in *apply*|*destroy*)
                 deny "whatbreaks: a terraform apply/destroy piped into a shell cannot be reviewed. Run the plan, review it with /whatbreaks:review, then apply the reviewed plan file directly." ;;
               esac ;;
-          esac
-        fi ;;
-    esac
-  fi
+            esac
+          fi ;;
+      esac
+    fi
 
-  i=0
-  while [ $i -lt "${#W[@]}" ]; do
-    t="${W[$i]}"
-    case "$t" in
-      then|do|else|elif|'!'|if|while|until) i=$((i+1)); continue ;;
-      [A-Za-z_]*=*) i=$((i+1)); continue ;;
-      --) i=$((i+1)); continue ;;
-      sudo|env|time|nohup|command|exec|nice|ionice|stdbuf|unbuffer|caffeinate|doas|flock|chronic|ts|strace|ltrace|watch|timeout|\
-      aws-vault|op|direnv|mise|asdf|tfenv|tgenv|poetry|pipenv|bundle|docker|podman|nix-shell|nix|devbox|just|task)
-        # Generic wrapper: skip it, its options and their values, up to the first token that is
-        # a terraform binary (position-independent, so `aws-vault exec prod -- terraform` works).
-        j=$((i+1)); found=-1
-        while [ $j -lt "${#W[@]}" ]; do
-          if is_tf_binary "${W[$j]}"; then found=$j; break; fi
-          j=$((j+1))
-        done
-        if [ $found -ge 0 ]; then i=$found; else i=${#W[@]}; fi
-        break ;;
-      bash|sh|zsh|dash|ksh|eval|xargs|find|script|expect|ssh)
-        # Shells/evaluators receive a command string: re-split every remaining token on
-        # whitespace (a quoted "terraform apply x" becomes three words) and scan forward.
+    # ---- find the terraform binary anywhere in the command (wrappers, shells, ssh, docker)
+    # unless the command only consumes text.
+    IS_TEXT=0
+    for c in $TEXT_CONSUMERS; do [ "$FIRSTBASE" = "$c" ] && IS_TEXT=1; done
+    FOUND=-1
+    if [ "$IS_TEXT" -eq 0 ]; then
+      # First look at the tokens as quoted (so "my plan.tfplan" stays one argument).
+      j=$i
+      while [ $j -lt "$N" ]; do
+        if is_tf_binary "${W[$j]}"; then FOUND=$j; break; fi
+        j=$((j+1))
+      done
+      if [ "$FOUND" -lt 0 ]; then
+        # Not found: re-split every token on whitespace so that a quoted "terraform apply x"
+        # handed to a shell, ssh, xargs, or a wrapper becomes separate words, and scan again.
         NEWW=()
-        j=$((i+1))
-        while [ $j -lt "${#W[@]}" ]; do
+        j=$i
+        while [ $j -lt "$N" ]; do
           read -r -a PARTS <<< "${W[$j]}" || true
           for q in "${PARTS[@]+"${PARTS[@]}"}"; do NEWW+=("$q"); done
           j=$((j+1))
         done
-        W=("${NEWW[@]+"${NEWW[@]}"}")
-        j=0; found=-1
-        while [ $j -lt "${#W[@]}" ]; do
-          if is_tf_binary "${W[$j]}"; then found=$j; break; fi
+        j=0
+        while [ $j -lt "${#NEWW[@]}" ]; do
+          if is_tf_binary "${NEWW[$j]}"; then FOUND=$j; break; fi
           j=$((j+1))
         done
-        if [ $found -ge 0 ]; then i=$found; else i=${#W[@]}; fi
-        break ;;
-      cd|pushd)
-        if [ $((i+1)) -lt "${#W[@]}" ]; then
-          d="${W[$((i+1))]}"
-          case "$d" in /*) EFFECTIVE_CWD="$d" ;; "~"*) EFFECTIVE_CWD="$HOME${d#\~}" ;; *) EFFECTIVE_CWD="$EFFECTIVE_CWD/$d" ;; esac
+        if [ "$FOUND" -ge 0 ]; then
+          W=("${NEWW[@]+"${NEWW[@]}"}"); N="${#W[@]}"
         fi
-        PREV_SEG="$SEG"; continue 2 ;;
-      cp|mv|ln|curl|wget|tee|dd|install|rsync|touch|truncate)
-        SAW_WRITER=1; PREV_SEG="$SEG"; continue 2 ;;
-    esac
-    break
-  done
-  if [ $i -ge "${#W[@]}" ]; then
-    [ "$SEG_WRITES" -eq 1 ] && SAW_WRITER=1
-    PREV_SEG="$SEG"; continue
-  fi
-  BIN="${W[$i]}"
-  if ! is_tf_binary "$BIN"; then
-    [ "$SEG_WRITES" -eq 1 ] && SAW_WRITER=1
-    PREV_SEG="$SEG"; continue
-  fi
-  BIN=${BIN##*/}; BIN=${BIN%.exe}
-  i=$((i+1))
+      fi
+    fi
 
-  CHDIR=""; SUB=""; RUNALL=0
-  while [ $i -lt "${#W[@]}" ]; do
-    t="${W[$i]}"
-    case "$t" in
-      -chdir=*) CHDIR=${t#-chdir=} ; i=$((i+1)) ;;
-      --all) RUNALL=1; i=$((i+1)) ;;
-      -*) i=$((i+1)) ;;
-      run-all) RUNALL=1; i=$((i+1)) ;;
-      run|stack|exec) i=$((i+1)) ;;
+    if [ "$FOUND" -lt 0 ]; then
+      # Not a terraform command. Is it harmless to run before an apply on the same line?
+      harmless=0
+      for c in $HARMLESS $TEXT_CONSUMERS; do [ "$FIRSTBASE" = "$c" ] && harmless=1; done
+      [ "$harmless" -eq 0 ] && SAW_UNSAFE=1
+      mention=1
+      for c in $READ_ONLY_MENTIONERS; do [ "$FIRSTBASE" = "$c" ] && mention=0; done
+      record_earlier "$mention" "${W[@]+"${W[@]}"}"
+      PREV_SEG="$SEG"; continue
+    fi
+
+    BIN="${W[$FOUND]}"; BIN=${BIN##*/}; BIN=${BIN%.exe}; BIN=${BIN%%:*}; BIN=${BIN%%@*}
+    i=$((FOUND+1))
+
+    CHDIR=""; SUB=""; RUNALL=0; HELP=0
+    while [ $i -lt "$N" ]; do
+      t="${W[$i]}"
+      case "$t" in
+        -chdir=*) CHDIR=${t#-chdir=}; i=$((i+1)) ;;
+        --all) RUNALL=1; i=$((i+1)) ;;
+        -help|--help|-h) HELP=1; i=$((i+1)) ;;
+        [0-9]\>*|[0-9]\<*|\>*|\<*) i=$((i+1)) ;;               # a redirection before the subcommand
+        -*) i=$((i+1)) ;;
+        run-all) RUNALL=1; i=$((i+1)) ;;
+        run|stack|exec) i=$((i+1)) ;;
+        *)
+          if is_tf_binary "$t"; then
+            BIN=${t##*/}; BIN=${BIN%.exe}; BIN=${BIN%%:*}; BIN=${BIN%%@*}; i=$((i+1)); continue
+          fi
+          SUB="$t"; i=$((i+1)); break ;;
+      esac
+    done
+    if [ "$HELP" -eq 1 ]; then PREV_SEG="$SEG"; continue; fi
+    [ "$SUB" = "plan" ] && SAW_PLAN_SUBCMD=1
+
+    KNOWN=0
+    for c in $TF_READONLY apply destroy; do [ "$SUB" = "$c" ] && KNOWN=1; done
+    if [ "$KNOWN" -eq 0 ] && { [ "$COMPUTED" -eq 1 ] || [ "$LINE_COMPUTED" -eq 1 ]; }; then
+      deny "whatbreaks: the $BIN subcommand is computed at run time (a variable, substitution, or quoting trick), so it cannot be checked. Write the command out plainly: $BIN plan -out=tfplan, /whatbreaks:review tfplan, $BIN apply tfplan."
+    fi
+    case "$SUB" in
+      apply|destroy) ;;
       *)
-        if is_tf_binary "$t"; then
-          # e.g. `terragrunt exec -- terraform apply`: restart at the nested binary
-          BIN=${t##*/}; BIN=${BIN%.exe}; i=$((i+1)); continue
-        fi
-        SUB="$t"; i=$((i+1)); break ;;
+        record_earlier 0 "${W[@]+"${W[@]}"}"
+        [ "$KNOWN" -eq 0 ] && SAW_UNSAFE=1
+        PREV_SEG="$SEG"; continue ;;
     esac
-  done
-  [ "$SUB" = "plan" ] && SAW_PLAN_SUBCMD=1
-  case "$SUB" in
-    apply|destroy) ;;
-    *) [ "$SEG_WRITES" -eq 1 ] && SAW_WRITER=1; PREV_SEG="$SEG"; continue ;;
-  esac
 
-  HOWTO="Run the plan and review it first:@NL@  $BIN plan -out=tfplan@NL@  /whatbreaks:review tfplan@NL@then apply that exact file: $BIN apply tfplan. If the review verdict is BLOCK, the user must accept the risk themselves with /whatbreaks:approve tfplan before the apply is allowed."
+    HOWTO="Run the plan and review it first:@NL@  $BIN plan -out=tfplan@NL@  /whatbreaks:review tfplan@NL@then apply that exact file: $BIN apply tfplan. If the review verdict is BLOCK, the user must accept the risk themselves with /whatbreaks:approve tfplan before the apply is allowed."
 
-  DESTROY=0; AUTO=0; PLANFILE=""; HELP=0
-  [ "$SUB" = "destroy" ] && DESTROY=1
-  while [ $i -lt "${#W[@]}" ]; do
-    t="${W[$i]}"
-    case "$t" in
-      -help|--help|-h) HELP=1; i=$((i+1)) ;;
-      --) i=$((i+1)); if [ $i -lt "${#W[@]}" ] && [ -z "$PLANFILE" ]; then PLANFILE="${W[$i]}"; fi; break ;;
-      -destroy|--destroy) DESTROY=1; i=$((i+1)) ;;
-      -auto-approve|--auto-approve|-auto-approve=true|--auto-approve=true) AUTO=1; i=$((i+1)) ;;
-      --terragrunt-non-interactive|--non-interactive) AUTO=1; i=$((i+1)) ;;
-      -var|-var-file|-target|-replace|-exclude|-parallelism|-backup|-state|-state-out|-lock-timeout|\
-      --terragrunt-working-dir|--working-dir|--terragrunt-config|--config|--terragrunt-iam-role|--iam-role|\
-      --terragrunt-include-dir|--queue-include-dir|--terragrunt-exclude-dir|--queue-exclude-dir|\
-      --terragrunt-download-dir|--download-dir|--terragrunt-parallelism|--terragrunt-log-level|--log-level|\
-      --terragrunt-source|--source|--terragrunt-source-map|--terragrunt-strict-control|--strict-control)
-        i=$((i+2)) ;;
-      -*) i=$((i+1)) ;;
-      *) [ -z "$PLANFILE" ] && PLANFILE="$t"; i=$((i+1)) ;;
+    DESTROY=0; AUTO=0; PLANFILE=""
+    [ "$SUB" = "destroy" ] && DESTROY=1
+    while [ $i -lt "$N" ]; do
+      t="${W[$i]}"
+      case "$t" in
+        -help|--help|-h) HELP=1; i=$((i+1)) ;;
+        --) i=$((i+1)); if [ $i -lt "$N" ] && [ -z "$PLANFILE" ]; then PLANFILE="${W[$i]}"; fi; break ;;
+        -destroy|--destroy) DESTROY=1; i=$((i+1)) ;;
+        -auto-approve|--auto-approve|-auto-approve=true|--auto-approve=true) AUTO=1; i=$((i+1)) ;;
+        --terragrunt-non-interactive|--non-interactive) AUTO=1; i=$((i+1)) ;;
+        -var|-var-file|-target|-replace|-exclude|-parallelism|-backup|-state|-state-out|-lock-timeout|\
+        --terragrunt-working-dir|--working-dir|--terragrunt-config|--config|--terragrunt-iam-role|--iam-role|\
+        --terragrunt-include-dir|--queue-include-dir|--terragrunt-exclude-dir|--queue-exclude-dir|\
+        --terragrunt-download-dir|--download-dir|--terragrunt-parallelism|--terragrunt-log-level|--log-level|\
+        --terragrunt-source|--source|--terragrunt-source-map|--terragrunt-strict-control|--strict-control)
+          i=$((i+2)) ;;
+        [0-9]\>*|[0-9]\<*|\>*|\<*) i=$((i+1)) ;;
+        -*) i=$((i+1)) ;;
+        *) [ -z "$PLANFILE" ] && PLANFILE="$t"; i=$((i+1)) ;;
+      esac
+    done
+    if [ "$HELP" -eq 1 ]; then PREV_SEG="$SEG"; continue; fi
+
+    # ---- decisions ----
+    if [ "$RUNALL" -eq 1 ]; then
+      deny "whatbreaks: terragrunt run-all $SUB applies every module at once with no per-module plan review. Run plan per module with an absolute -out path, review each with /whatbreaks:review, then apply the reviewed plan files one at a time."
+    fi
+
+    if [ -z "$PLANFILE" ]; then
+      if [ "$DESTROY" -eq 1 ]; then
+        deny "whatbreaks: $BIN destroy is blocked. Create a destroy plan instead:@NL@  $BIN plan -destroy -out=destroy.tfplan@NL@  /whatbreaks:review destroy.tfplan@NL@The verdict will normally be BLOCK (everything is destroyed), so the user must accept it themselves with /whatbreaks:approve destroy.tfplan before $BIN apply destroy.tfplan is allowed."
+      fi
+      if [ "$AUTO" -eq 1 ] || [ "$ENV_ARGS" -eq 1 ] || [ "$PIPED" -eq 1 ] || [ "$REDIRECT_IN" -eq 1 ]; then
+        deny "whatbreaks: $BIN apply with -auto-approve (or a piped/env-injected approval) and no saved plan file would apply whatever the current plan is, unreviewed. $HOWTO"
+      fi
+      deny "whatbreaks: $BIN apply without a saved plan file cannot be reviewed before it runs. $HOWTO"
+    fi
+    case "$PLANFILE" in
+      *'$'*|*'`'*) deny "whatbreaks: the plan file name is computed at run time ($PLANFILE), so the reviewed file cannot be identified. Name the file plainly." ;;
     esac
-  done
-  if [ "$HELP" -eq 1 ]; then PREV_SEG="$SEG"; continue; fi
 
-  # ---- decisions ----
-  if [ "$RUNALL" -eq 1 ]; then
-    deny "whatbreaks: terragrunt run-all $SUB applies every module at once with no per-module plan review. Run plan per module with an absolute -out path, review each with /whatbreaks:review, then apply the reviewed plan files one at a time."
-  fi
-
-  if [ -z "$PLANFILE" ]; then
-    if [ "$DESTROY" -eq 1 ]; then
-      deny "whatbreaks: $BIN destroy is blocked. Create a destroy plan instead:@NL@  $BIN plan -destroy -out=destroy.tfplan@NL@  /whatbreaks:review destroy.tfplan@NL@The verdict will normally be BLOCK (everything is destroyed), so the user must accept it themselves with /whatbreaks:approve destroy.tfplan before $BIN apply destroy.tfplan is allowed."
+    # Anything earlier on the same line that is not known-harmless, ran `plan`, or mentioned
+    # this file by name could have rewritten it: the hash checked now may not be what
+    # terraform reads.
+    PLANBASE=${PLANFILE##*/}
+    case "$EARLIER_BASENAMES" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
+    case "$REDIRECT_TARGETS" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
+    if [ "$SAW_PLAN_SUBCMD" -eq 1 ] || [ "$SAW_UNSAFE" -eq 1 ] || [ "$UNRESOLVED_REDIRECT" -eq 1 ]; then
+      deny "whatbreaks: something earlier in this command (plan -out, a copy/download, a redirection, or a command that could write files) runs before the apply, so the plan file cannot be verified. Run the plan first, then /whatbreaks:review $PLANFILE, then apply in a separate command."
     fi
-    if [ "$AUTO" -eq 1 ] || [ "$ENV_ARGS" -eq 1 ] || [ "$PIPED" -eq 1 ] || [ "$REDIRECT_IN" -eq 1 ]; then
-      deny "whatbreaks: $BIN apply with -auto-approve (or a piped/env-injected approval) and no saved plan file would apply whatever the current plan is, unreviewed. $HOWTO"
+
+    # Resolve the plan file. With -chdir, terraform resolves relative paths inside that directory.
+    BASE="$EFFECTIVE_CWD"
+    if [ -n "$CHDIR" ]; then
+      case "$CHDIR" in /*) BASE="$CHDIR" ;; *) BASE="$EFFECTIVE_CWD/$CHDIR" ;; esac
     fi
-    deny "whatbreaks: $BIN apply without a saved plan file cannot be reviewed before it runs. $HOWTO"
-  fi
+    case "$PLANFILE" in /*) RESOLVED="$PLANFILE" ;; "~"*) RESOLVED="$HOME${PLANFILE#\~}" ;; *) RESOLVED="$BASE/$PLANFILE" ;; esac
+    if [ ! -f "$RESOLVED" ]; then
+      deny "whatbreaks: plan file $PLANFILE was not found (looked in $BASE), so it cannot have been reviewed. With terragrunt, a relative -out path lands in .terragrunt-cache; re-plan with an absolute -out path. $HOWTO"
+    fi
 
-  # Anything earlier in the same command line that can (re)write files means the hash
-  # checked now may not be the file terraform will read.
-  if [ "$SAW_PLAN_SUBCMD" -eq 1 ] || [ "$SAW_WRITER" -eq 1 ]; then
-    deny "whatbreaks: this command writes files (plan -out, cp, mv, curl, redirection, ...) and then applies in the same line, so the plan file cannot be verified. Run the plan first, then /whatbreaks:review $PLANFILE, then apply in a separate command."
-  fi
-
-  # Resolve the plan file. With -chdir, terraform resolves relative paths inside that directory.
-  BASE="$EFFECTIVE_CWD"
-  if [ -n "$CHDIR" ]; then
-    case "$CHDIR" in /*) BASE="$CHDIR" ;; *) BASE="$EFFECTIVE_CWD/$CHDIR" ;; esac
-  fi
-  case "$PLANFILE" in /*) RESOLVED="$PLANFILE" ;; *) RESOLVED="$BASE/$PLANFILE" ;; esac
-  if [ ! -f "$RESOLVED" ]; then
-    deny "whatbreaks: plan file $PLANFILE was not found (looked in $BASE), so it cannot have been reviewed. With terragrunt, a relative -out path lands in .terragrunt-cache; re-plan with an absolute -out path. $HOWTO"
-  fi
-
-  [ -z "$MARKER_DIR" ] && deny "whatbreaks: no plugin data directory is available (CLAUDE_PLUGIN_DATA is unset), so reviews cannot be verified. Update Claude Code, or turn the gate off with the apply_gate option."
-  HASH=$(sha256_of "$RESOLVED")
-  [ -z "$HASH" ] && deny "whatbreaks: cannot hash $PLANFILE (no sha256sum, shasum, or openssl on PATH), so the review cannot be verified. $HOWTO"
-  MARKER="$MARKER_DIR/$HASH.json"
-  if [ ! -f "$MARKER" ]; then
-    deny "whatbreaks: $PLANFILE has not been reviewed (no review marker for sha256 ${HASH:0:12}). Run /whatbreaks:review $PLANFILE first. Re-running plan produces a new file that needs its own review."
-  fi
-  APPROVED=$(marker_field "$MARKER" approved)
-  VERDICT=$(marker_field "$MARKER" verdict)
-  STATUS=$(marker_field "$MARKER" status)
-  if [ "$APPROVED" = "true" ]; then PREV_SEG="$SEG"; continue; fi
-  if [ "$VERDICT" = "block" ] || [ "$STATUS" = "blocked" ]; then
-    deny "whatbreaks: the review of $PLANFILE ended in BLOCK (critical findings). Do not work around this. Restate the critical findings to the user; if they still want to apply, they must run /whatbreaks:approve $PLANFILE themselves. Only then is $BIN apply $PLANFILE allowed."
-  fi
-  if [ "$STATUS" = "reviewed" ] || [ "$STATUS" = "approved" ]; then PREV_SEG="$SEG"; continue; fi
-  deny "whatbreaks: the review marker for $PLANFILE is incomplete (status=$STATUS verdict=$VERDICT). Re-run /whatbreaks:review $PLANFILE."
-done <<EOF
+    [ -z "$MARKER_DIR" ] && deny "whatbreaks: no plugin data directory is available (CLAUDE_PLUGIN_DATA is unset), so reviews cannot be verified. Update Claude Code, or turn the gate off with the apply_gate option."
+    HASH=$(sha256_of "$RESOLVED")
+    [ -z "$HASH" ] && deny "whatbreaks: cannot hash $PLANFILE (no sha256sum, shasum, or openssl on PATH), so the review cannot be verified. $HOWTO"
+    MARKER="$MARKER_DIR/$HASH.json"
+    if [ ! -f "$MARKER" ]; then
+      deny "whatbreaks: $PLANFILE has not been reviewed (no review marker for sha256 ${HASH:0:12}). Run /whatbreaks:review $PLANFILE first. Re-running plan produces a new file that needs its own review."
+    fi
+    APPROVED=$(marker_field "$MARKER" approved)
+    VERDICT=$(marker_field "$MARKER" verdict)
+    STATUS=$(marker_field "$MARKER" status)
+    if [ "$APPROVED" = "true" ]; then PREV_SEG="$SEG"; continue; fi
+    if [ "$VERDICT" = "block" ] || [ "$STATUS" = "blocked" ]; then
+      deny "whatbreaks: the review of $PLANFILE ended in BLOCK (critical findings). Do not work around this. Restate the critical findings to the user; if they still want to apply, they must run /whatbreaks:approve $PLANFILE themselves. Only then is $BIN apply $PLANFILE allowed."
+    fi
+    if [ "$STATUS" = "reviewed" ] || [ "$STATUS" = "approved" ]; then PREV_SEG="$SEG"; continue; fi
+    deny "whatbreaks: the review marker for $PLANFILE is incomplete (status=$STATUS verdict=$VERDICT). Re-run /whatbreaks:review $PLANFILE."
+  done <<EOF2
 $SEGS
-EOF
+EOF2
+done <<EOF1
+$LINES
+EOF1
 
 allow

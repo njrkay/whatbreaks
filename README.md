@@ -188,7 +188,7 @@ boundary.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fixtures.py   # 26 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh                                    # 85 apply-gate scenarios, including known bypass shapes
+bash tests/test_hook.sh                                    # 122 apply-gate scenarios, including known bypass shapes
 python3 tests/check_submission.py                          # the directory's pre-submission rules
 claude plugin validate .                                   # manifest and component checks
 claude plugin eval . --allow-tools Write "Bash(python3 *)" # behavioural evals (uses your Claude credentials)
