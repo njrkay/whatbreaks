@@ -38,13 +38,14 @@ printf -v BLANK_RUN_END '[! \t]'          # the first character after a run of b
 printf -v HD '%s%s' '<' '<'                # the here-document operator, as data (never written out in this file)
 printf -v STEP_IFS '%s\\ \t;&|(){}`' "\"'"  # every character that costs the parsing below a step
 printf -v QUOTE_IFS '%s\\' "\"'"           # quotes and backslashes, for counting
-printf -v SUBST_OPEN '%s%s' '$' '('        # the substitution opener, as data
-printf -v BRACE_OPEN '%s%s' '$' '{'        # the brace-expansion opener, as data
+printf -v DOLLAR '\044'                    # the dollar sign, as data
+printf -v SUBST_OPEN '\044('               # the substitution opener, as data
+printf -v BRACE_OPEN '\044{'               # the brace-expansion opener, as data
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
 # timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
 # with a quadratic scan on long strings, so the code below only uses prefix/suffix cuts and
-# offsets that cost one pass, and caps the sizes it loops over first (bytes, quotes, lines,
+# offsets that cost one sweep, and caps the sizes it loops over first (bytes, quotes, lines,
 # parts and words). Everything is done in this shell: no command substitution, no other
 # interpreter; the only external programs are the hash tools.
 
@@ -66,18 +67,18 @@ deny() {
 allow() { exit 0; }
 
 json_string() {
-  # $1 = key. R = the string value of the first `"key": "..."` pair in INPUT with its
-  # escapes decoded, or empty when the key is absent or its value is not a string. An
-  # escaped `\"key\"` inside a string value never matches, because the quote after the
+  # $1 = field name. R = the string value of the first `"name": "..."` pair in INPUT with its
+  # escapes decoded, or empty when the field is absent or its value is not a string. An
+  # escaped `\"name\"` inside a string value never matches, because the quote after the
   # name is preceded by a backslash there. The text is scanned in 1 KiB windows (an escape
   # cut by a window boundary is carried over); each window's text is gathered in a small
   # string and the windows are joined once at the end, so the cost stays linear: bash
   # walks the whole string on every cut, so cuts must be made on short strings.
-  local s key="\"$1\"" pre c win acc i n esc
+  local s name="\"$1\"" pre c win acc i n esc
   local -a parts
   R=""
-  case "$INPUT" in *"$key"*) ;; *) return 0 ;; esac
-  s=${INPUT#*"$key"}
+  case "$INPUT" in *"$name"*) ;; *) return 0 ;; esac
+  s=${INPUT#*"$name"}
   pre=${s%%[![:space:]]*}; s=${s:${#pre}}
   [ "${s:0:1}" = ":" ] || return 0
   s=${s:1}
@@ -147,13 +148,13 @@ count_words() {
 }
 
 read_marker() {
-  # $1 = marker file (one key per line, written by the review scripts). Sets M_APPROVED,
-  # M_VERDICT and M_STATUS from the last matching lines; a key that only appears escaped
+  # $1 = marker file (one field per line, written by the review scripts). Sets M_APPROVED,
+  # M_VERDICT and M_STATUS from the last matching lines; a field that only appears escaped
   # inside a string value (\"status\") has no quote right after its name and never matches.
   local line lead v
   M_APPROVED=""; M_VERDICT=""; M_STATUS=""
   while IFS= read -r line || [ -n "$line" ]; do
-    lead=${line%%[![:space:]]*}; line=${line:${#lead}}   # the key starts the line
+    lead=${line%%[![:space:]]*}; line=${line:${#lead}}   # the field name starts the line
     case "$line" in
       '"approved":'*|'"verdict":'*|'"status":'*)
         v=${line#*:}
@@ -190,13 +191,13 @@ gate_by_hash() {
 
 tokenize() {
   # Split $1 into shell words the way the shell would, removing quotes and backslash
-  # escapes and expanding nothing: TOK=(...). `'...'` is literal, `"..."` honours \" \\ \$
-  # and \`, a backslash outside quotes protects the next character, and a dollar-quoted
+  # escapes and expanding nothing: WORDS=(...). `'...'` is literal, `"..."` honours the
+  # escaped quote, backslash, dollar and backtick, a backslash outside quotes protects the next character, and a dollar-quoted
   # word honours \' and \\. An unterminated quote runs to the end of the text. The text is
   # scanned in 1 KiB windows with the quoting state carried across them, so that every cut
   # is made on a short string (bash walks the whole string on each cut); runs of ordinary
   # characters and of blanks cost one step each.
-  TOK=()
+  WORDS=()
   local s="$1" n=${#1} i=0 win pre c cur="" inword=0 mode=plain esc=0
   while [ "$i" -lt "$n" ]; do
     win=${s:i:1024}; i=$((i+${#win}))
@@ -205,7 +206,7 @@ tokenize() {
         esc=0; c=${win:0:1}
         case "$mode" in
           plain) cur="$cur$c"; win=${win:1} ;;
-          dq) case "$c" in \"|\\|\$|\`) cur="$cur$c"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+          dq) case "$c" in \"|\\|"$DOLLAR"|\`) cur="$cur$c"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
           *) case "$c" in \'|\\) cur="$cur$c"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
         esac
         continue
@@ -217,14 +218,14 @@ tokenize() {
           c=${win:0:1}; win=${win:1}
           case "$c" in
             ' '|"$TAB")
-              if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi
+              if [ "$inword" -eq 1 ]; then WORDS+=("$cur"); cur=""; inword=0; fi
               pre=${win%%$BLANK_RUN_END*}; win=${win:${#pre}} ;;   # skip the rest of the blank run in one step
             \\)
               inword=1
               if [ -n "$win" ]; then cur="$cur${win:0:1}"; win=${win:1}; else esc=1; fi ;;
             \')
               inword=1
-              if [ "${cur%\$}" != "$cur" ]; then cur=${cur%\$}; mode=sq; else mode=lit; fi ;;
+              if [ "${cur%"$DOLLAR"}" != "$cur" ]; then cur=${cur%"$DOLLAR"}; mode=sq; else mode=lit; fi ;;
             \") inword=1; mode=dq ;;
           esac ;;
         lit)                                      # inside '...'
@@ -236,7 +237,7 @@ tokenize() {
           c=${win:0:1}; win=${win:1}
           if [ "$c" = '"' ]; then mode=plain; continue; fi
           if [ -z "$win" ]; then esc=1; continue; fi
-          case "${win:0:1}" in \"|\\|\$|\`) cur="$cur${win:0:1}"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+          case "${win:0:1}" in \"|\\|"$DOLLAR"|\`) cur="$cur${win:0:1}"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
         sq)                                       # inside a dollar-quoted word
           pre=${win%%$SQ_CLASS*}; cur="$cur$pre"; win=${win:${#pre}}
           [ -z "$win" ] && break
@@ -247,7 +248,7 @@ tokenize() {
       esac
     done
   done
-  [ "$inword" -eq 1 ] && TOK+=("$cur")
+  [ "$inword" -eq 1 ] && WORDS+=("$cur")
   return 0
 }
 
@@ -260,7 +261,7 @@ split_ws() {
 }
 
 base_of() {
-  # R = the part of $1 after its last slash (one pass; `${x##*/}` is quadratic in bash 3.2)
+  # R = the part of $1 after its last slash (one sweep; `${x##*/}` is quadratic in bash 3.2)
   local d=${1%/*}
   if [ "$d" = "$1" ]; then R=$1; else R=${1:$((${#d}+1))}; fi
 }
@@ -272,11 +273,11 @@ after_last() {
 }
 
 tf_name() {
-  # R = the program name in token $1 stripped of dollar-quoting, path, flake#attr, .exe
-  # and an image tag or digest; empty when the token is too long to be a program name.
+  # R = the program name in word $1 stripped of dollar-quoting, path, flake#attr, .exe
+  # and an image tag or digest; empty when the word is too long to be a program name.
   local b="$1"
   [ "${#b}" -gt 512 ] && b=${b:$((${#b}-512))}   # only the tail can hold the program name
-  b=${b#\$}
+  b=${b#"$DOLLAR"}
   base_of "$b"; b=$R
   if [ "${#b}" -gt 256 ]; then R=""; return 0; fi    # not a program name
   after_last '#' "$b"; b=$R
@@ -306,7 +307,7 @@ split_segments() {
   # Cut line $1 into simple commands: SEG_ARR. A segment that follows `|` is marked
   # @PIPE@, one that starts a dollar-paren or backtick substitution @SUBST@, and the text after a
   # `)` @TAIL@. `>&`, `<&` and `&>` are redirections, not separators; `{`/`}` only
-  # separate as words. One pass: each cut is a prefix operation plus an offset.
+  # separate as words. One sweep: each cut is a prefix operation plus an offset.
   SEG_ARR=()
   local rest="$1" seg="" mark="" pre c1 c2 prev
   while :; do
@@ -323,7 +324,7 @@ split_segments() {
         if [ "$c2" = '&' ]; then emit; rest=${rest:2}
         elif [ "$prev" = '>' ] || [ "$prev" = '<' ] || [ "$c2" = '>' ]; then seg="$seg&"; rest=${rest:1}
         else emit; rest=${rest:1}; fi ;;
-      '(') if [ "$prev" = '$' ]; then seg=${seg%\$}; emit; mark="@SUBST@ "; else emit; fi; rest=${rest:1} ;;
+      '(') if [ "$prev" = "$DOLLAR" ]; then seg=${seg%"$DOLLAR"}; emit; mark="@SUBST@ "; else emit; fi; rest=${rest:1} ;;
       ')') emit; mark="@TAIL@ "; rest=${rest:1} ;;
       '`') emit; mark="@SUBST@ "; rest=${rest:1} ;;
       '{') if blank "$prev" && { [ -z "$c2" ] || blank "$c2"; }; then emit; else seg="$seg{"; fi; rest=${rest:1} ;;
@@ -337,19 +338,19 @@ record_earlier() {
   # $1 = 1 when plain mentions of file names must be recorded (the command could write them),
   # then the tokens. Redirect targets are always recorded; an unresolvable target is unsafe.
   local mention="$1"; shift
-  local expect_target=0 tok
-  for tok in "$@"; do
+  local expect_target=0 wd
+  for wd in "$@"; do
     if [ "$expect_target" -eq 1 ]; then
       expect_target=0
-      case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*) ;; *) base_of "$tok"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac
+      case "$wd" in *"$DOLLAR"*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*) ;; *) base_of "$wd"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac
       continue
     fi
-    case "$tok" in
+    case "$wd" in
       \>|\>\>|[0-9]\>|[0-9]\>\>|\&\>|\&\>\>) expect_target=1 ;;
       \>*|[0-9]\>*|\&\>*)
-        tok=${tok#\&}; tok=${tok#[0-9]}; tok=${tok#\>}; tok=${tok#\>}
-        case "$tok" in *'$'*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*|"") ;; *) base_of "$tok"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac ;;
-      *) if [ "$mention" -eq 1 ]; then base_of "$tok"; EARLIER_BASENAMES="$EARLIER_BASENAMES$R "; fi ;;
+        wd=${wd#\&}; wd=${wd#[0-9]}; wd=${wd#\>}; wd=${wd#\>}
+        case "$wd" in *"$DOLLAR"*|*'*'*|*'?'*) UNRESOLVED_REDIRECT=1 ;; \&*|"") ;; *) base_of "$wd"; REDIRECT_TARGETS="$REDIRECT_TARGETS$R " ;; esac ;;
+      *) if [ "$mention" -eq 1 ]; then base_of "$wd"; EARLIER_BASENAMES="$EARLIER_BASENAMES$R "; fi ;;
     esac
   done
 }
@@ -410,10 +411,16 @@ if [ "${#CMD}" -gt 131072 ]; then
 fi
 
 # From here on any unexpected error must deny (exit 1 would be treated as non-blocking).
-# shellcheck disable=SC2154  # rc is assigned inside the trap
-trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"whatbreaks: hook failed internally (exit %s); refusing to allow a terraform command blindly.\"}}\n" "$rc"; exit 2; fi' EXIT
+on_exit() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"whatbreaks: hook failed internally (exit %s); refusing to allow a terraform command blindly."}}\n' "$rc"
+    exit 2
+  fi
+}
+trap on_exit EXIT
 
-# User switched the gate off via userConfig (CLAUDE_PLUGIN_OPTION_<KEY>).
+# User switched the gate off via userConfig (CLAUDE_PLUGIN_OPTION_<OPTION>).
 GATE="${CLAUDE_PLUGIN_OPTION_APPLY_GATE:-${CLAUDE_PLUGIN_OPTION_apply_gate:-true}}"
 case "$GATE" in
   [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) allow ;;
@@ -452,10 +459,10 @@ HEREDOC_END=""
 # arguments is data, not an invocation.
 TEXT_CONSUMERS="echo printf grep rg egrep fgrep git sed awk cat tee less more man head tail wc sort uniq cut tr vim vi nano code subl open pbcopy xclip diff comm"
 # Commands that cannot rewrite a plan file (given they do not mention it): safe to precede an apply.
-HARMLESS="cd pushd popd export unset set true false : echo printf ls pwd test [ [[ sleep date mkdir rm touch which type command hash whoami id uname clear history alias stat file du cmp md5sum sha256sum shasum"
+HARMLESS="cd pushd popd export unset set true false : echo printf ls test [ [[ sleep date mkdir rm touch which type command hash whoami id uname clear history alias stat file du cmp md5sum sha256sum shasum"
 # Commands that may mention the plan file without changing it (they only read it).
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
-TF_READONLY="init validate fmt show output version providers graph console test login logout workspace refresh get import taint untaint force-unlock metadata modules plan"
+TF_READONLY="init validate fmt show output version providers graph console test workspace refresh get import taint untaint force-unlock metadata modules plan"
 
 SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh su runuser chroot"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
@@ -496,14 +503,14 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   case "$LINE" in
     *"$HD"*)
       tokenize "$LINE"
-      HT=("${TOK[@]+"${TOK[@]}"}")
+      HT=("${WORDS[@]+"${WORDS[@]}"}")
       k=0
       while [ $k -lt "${#HT[@]}" ]; do
-        tok="${HT[$k]}"
-        case "$tok" in
+        wd="${HT[$k]}"
+        case "$wd" in
           "$HD<"*) ;;                                       # a here-string carries no body
           "$HD"|"$HD-") if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END="${HT[$((k+1))]}"; fi; break ;;
-          "$HD"*) tok=${tok#"$HD"}; tok=${tok#-}; HEREDOC_END="$tok"; break ;;
+          "$HD"*) wd=${wd#"$HD"}; wd=${wd#-}; HEREDOC_END="$wd"; break ;;
         esac
         k=$((k+1))
       done ;;
@@ -527,20 +534,20 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
         [ "$PRE_CLASS" = "text" ] && INHERIT_TEXT=1
       fi ;;
     esac
-    case "$SEG" in *'$'*) COMPUTED=1 ;; esac
+    case "$SEG" in *"$DOLLAR"*) COMPUTED=1 ;; esac
     REDIRECT_IN=0
     case "$SEG" in *'<'*) REDIRECT_IN=1 ;; esac
 
     # ---- tokenize into shell words (quotes removed, nothing expanded)
     tokenize "$SEG"
     W=()
-    for tok in "${TOK[@]+"${TOK[@]}"}"; do W+=("${tok:0:4096}"); done
+    for wd in "${WORDS[@]+"${WORDS[@]}"}"; do W+=("${wd:0:4096}"); done
     if [ "${#W[@]}" -eq 0 ]; then PREV_SEG="$SEG"; continue; fi
 
-    # drop a trailing comment (a token that *starts* with #)
+    # drop a trailing comment (a word that *starts* with #)
     N=0
-    for tok in "${W[@]+"${W[@]}"}"; do
-      case "$tok" in \#*) break ;; esac
+    for wd in "${W[@]+"${W[@]}"}"; do
+      case "$wd" in \#*) break ;; esac
       N=$((N+1))
     done
     [ "$N" -eq 0 ] && { PREV_SEG="$SEG"; continue; }
@@ -571,11 +578,11 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     # `echo terraform apply x | bash` (also behind sudo): a shell reading its script from a pipe
     if [ "$PIPED" -eq 1 ]; then
       shell_tok=""
-      for tok in "${W[@]+"${W[@]}"}"; do base_of "$tok"; case "$R" in bash|sh|zsh|dash|ksh) shell_tok="$tok" ;; esac; done
+      for wd in "${W[@]+"${W[@]}"}"; do base_of "$wd"; case "$R" in bash|sh|zsh|dash|ksh) shell_tok="$wd" ;; esac; done
       case "$shell_tok" in
         ?*)
           has_c=0
-          for tok in "${W[@]+"${W[@]}"}"; do case "$tok" in -c|-*c*) has_c=1 ;; esac; done
+          for wd in "${W[@]+"${W[@]}"}"; do case "$wd" in -c|-*c*) has_c=1 ;; esac; done
           if [ "$has_c" -eq 0 ]; then
             case "$PREV_SEG" in *terraform*|*tofu*|*terragrunt*|*' tf '*|'tf '*)
               case "$PREV_SEG" in *apply*|*destroy*)
@@ -608,13 +615,13 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
         j=$((j+1))
       done
       HAS_SHELL=0
-      for tok in "${W[@]+"${W[@]}"}"; do
-        case "$tok" in */*) base_of "$tok" ;; *) R=$tok ;; esac
+      for wd in "${W[@]+"${W[@]}"}"; do
+        case "$wd" in */*) base_of "$wd" ;; *) R=$wd ;; esac
         case " $SHELLS " in *" $R "*) HAS_SHELL=1 ;; esac
-        case "$tok" in -c|--run|--command|--eval) HAS_SHELL=1 ;; esac   # a wrapper taking a command string
+        case "$wd" in -c|--run|--command|--eval) HAS_SHELL=1 ;; esac   # a wrapper taking a command string
       done
       if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
-        # Not found: re-split every token on whitespace so that a quoted "terraform apply x"
+        # Not found: re-split every word on whitespace so that a quoted "terraform apply x"
         # handed to a shell, a remote shell, xargs, or a wrapper becomes separate words, and
         # scan again.
         NEWW=()
@@ -638,7 +645,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     if [ "$FOUND" -lt 0 ] && [ "$SCAN" -eq 1 ]; then
       # `$TF apply x`, `sudo "$BIN" -chdir=d destroy`: the program right before the subcommand
       # (skipping its flags) is named through a variable, so the binary cannot be seen. The
-      # command as a whole mentions terraform (it passed the fast path), so refuse rather than
+      # command as a whole mentions terraform (it got past the fast path), so refuse rather than
       # guess. `kubectl apply` and friends name their program plainly and are left alone.
       j=$i
       while [ $j -lt "$N" ]; do
@@ -648,7 +655,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
             while [ $k -gt $i ]; do case "${W[$k]}" in -*) k=$((k-1)) ;; *) break ;; esac; done
             if [ $k -ge $i ]; then
               case "${W[$k]}" in
-                \$*) deny "whatbreaks: the program running ${W[$j]} is named through a variable (${W[$k]}), so it cannot be checked. Write it out plainly: terraform plan -out=tfplan, /whatbreaks:review tfplan, terraform apply tfplan." ;;
+                "$DOLLAR"*) deny "whatbreaks: the program running ${W[$j]} is named through a variable (${W[$k]}), so it cannot be checked. Write it out plainly: terraform plan -out=tfplan, /whatbreaks:review tfplan, terraform apply tfplan." ;;
               esac
             fi ;;
         esac
@@ -757,7 +764,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       deny "whatbreaks: $BIN apply without a saved plan file cannot be reviewed before it runs. $HOWTO"
     fi
     case "$PLANFILE" in
-      *'$'*|*'`'*) deny "whatbreaks: the plan file name is computed at run time ($PLANFILE), so the reviewed file cannot be identified. Name the file plainly." ;;
+      *"$DOLLAR"*|*'`'*) deny "whatbreaks: the plan file name is computed at run time ($PLANFILE), so the reviewed file cannot be identified. Name the file plainly." ;;
     esac
 
     # Anything earlier on the same line that is not known-harmless, ran `plan`, or mentioned
