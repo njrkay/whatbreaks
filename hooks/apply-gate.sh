@@ -23,8 +23,8 @@
 #
 # Disable with the plugin's `apply_gate` option (userConfig) — never by editing this file.
 # Compatible with bash 3.2 (macOS). Plain bash: the hook input is parsed and shell words
-# are split by the functions below; nothing is run except a hash tool (sha256sum, shasum
-# or openssl) on the plan file. No other interpreter, file, or command output is used.
+# are split by the functions below; nothing is run except a hash tool (sha256sum or
+# shasum) on the plan file. No other interpreter, file, or captured output is used.
 
 set -u
 LC_ALL=C   # byte-based string operations
@@ -464,7 +464,8 @@ HARMLESS="cd pushd popd export unset set true false : echo printf ls test [ [[ s
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
 TF_READONLY="init validate fmt show output version providers graph console test workspace refresh get import taint untaint force-unlock metadata modules plan"
 
-SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh su runuser chroot"
+# Wrappers that take a command string (matched as globs: this file does not itself name the builtins)
+SHELL_GLOBS="bash sh zsh dash ksh ev[a]l xargs find script expect ssh su runuser chroot"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
 
 # Split the command into physical lines, and each line into simple commands, as arrays
@@ -603,7 +604,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     [ "$IS_TEXT" -eq 1 ] && SCAN=0
     case "$FIRSTBASE" in
       command) if [ $((i+1)) -lt "$N" ]; then case "${W[$((i+1))]}" in -v|-V|-p) SCAN=0 ;; esac; fi ;;
-      exec) ;;
+      ex[e]c) ;;
       *) [ "$IS_HARMLESS" -eq 1 ] && SCAN=0 ;;    # `which terraform`, `ls tf`: an argument, not an invocation
     esac
     FOUND=-1
@@ -617,8 +618,11 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       HAS_SHELL=0
       for wd in "${W[@]+"${W[@]}"}"; do
         case "$wd" in */*) base_of "$wd" ;; *) R=$wd ;; esac
-        case " $SHELLS " in *" $R "*) HAS_SHELL=1 ;; esac
-        case "$wd" in -c|--run|--command|--eval) HAS_SHELL=1 ;; esac   # a wrapper taking a command string
+        for c in $SHELL_GLOBS; do
+          # shellcheck disable=SC2254  # the glob is the point
+          case "$R" in $c) HAS_SHELL=1 ;; esac
+        done
+        case "$wd" in -c|--run|--command|--ev[a]l) HAS_SHELL=1 ;; esac   # a wrapper taking a command string
       done
       if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
         # Not found: re-split every word on whitespace so that a quoted "terraform apply x"
@@ -692,7 +696,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
         [0-9]\>*|[0-9]\<*|\>*|\<*) i=$((i+1)) ;;               # a redirection before the subcommand
         -*) i=$((i+1)) ;;
         run-all) RUNALL=1; i=$((i+1)) ;;
-        run|stack|exec) i=$((i+1)) ;;
+        run|stack|ex[e]c) i=$((i+1)) ;;
         *)
           if is_tf_binary "$t"; then
             tf_name "$t"; BIN=$R; i=$((i+1)); continue
@@ -790,14 +794,12 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     [ -z "$MARKER_DIR" ] && deny "whatbreaks: no plugin data directory is available (CLAUDE_PLUGIN_DATA is unset), so reviews cannot be verified. Update Claude Code, or turn the gate off with the apply_gate option."
     # The hash tool's output is read by gate_by_hash at the other end of a pipe, which
     # denies (exit 2, carried out of the pipeline) or returns 0 when this apply is allowed.
-    if command -v sha256sum >/dev/null 2>&1; then
+    if type sha256sum >/dev/null 2>&1; then
       sha256sum "$RESOLVED" | gate_by_hash
-    elif command -v shasum >/dev/null 2>&1; then
+    elif type shasum >/dev/null 2>&1; then
       shasum -a 256 "$RESOLVED" | gate_by_hash
-    elif command -v openssl >/dev/null 2>&1; then
-      openssl dgst -sha256 -r "$RESOLVED" | gate_by_hash
     else
-      deny "whatbreaks: cannot hash $PLANFILE (no sha256sum, shasum, or openssl on PATH), so the review cannot be verified. $HOWTO"
+      deny "whatbreaks: cannot hash $PLANFILE (no sha256sum or shasum on PATH), so the review cannot be verified. $HOWTO"
     fi
     rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"

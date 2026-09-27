@@ -176,7 +176,7 @@ boundary.
   folder including `analyze_plan.py` is copied into Claude's code-execution sandbox and runs there.
 - **Runs:** `terraform`/`tofu`/`terragrunt` `plan` (when you ask for a review without a plan file)
   and `show -json` (whenever a binary plan is reviewed), the bundled Python scripts, and the bash
-  hook, which runs nothing but `sha256sum` (or `shasum` / `openssl`) on the plan file. Nothing is
+  hook, which runs nothing but `sha256sum` (or `shasum`) on the plan file. Nothing is
   installed; there are no package launchers, no dependencies, no compiled code.
   `.github/` and `tests/` are development files that the plugin never runs.
 - **Writes:** with no argument, `whatbreaks.tfplan` and `whatbreaks.tfplan.json` in the working
