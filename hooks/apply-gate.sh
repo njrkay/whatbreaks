@@ -61,7 +61,8 @@ json_scalar() {
   # string with its escapes decoded, or a bare scalar (true, false, null, a number).
   # Prints nothing when the key is absent or its value is an object or array. \001 and
   # \002 stand in for escapes while the closing quote is found; JSON cannot contain
-  # those bytes unescaped. awk keeps this linear on large inputs.
+  # those bytes unescaped. awk keeps this linear on large inputs. (No split() here: the
+  # one-true-awk splits on newlines as well as on a single-character separator.)
   printf '%s' "$1" | LC_ALL=C awk -v key="$2" '
     BEGIN { RS = "\001" }
     NR == 1 {
@@ -84,8 +85,8 @@ json_scalar() {
       gsub(/\002/, "\"", s)
       gsub(/\\n/, "\n", s); gsub(/\\t/, "\t", s); gsub(/\\r/, "", s)
       gsub(/\\b/, " ", s); gsub(/\\f/, " ", s); gsub(/\\\//, "/", s)
-      n = split(s, parts, "\001")
-      for (k = 1; k <= n; k++) { if (k > 1) printf "%s", "\\"; printf "%s", parts[k] }
+      bs = "\\"; gsub(/\001/, bs, s)   # one backslash: a "\\\\" replacement gives two on some awks
+      printf "%s", s
       exit
     }'
 }
