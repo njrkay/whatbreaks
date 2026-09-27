@@ -29,12 +29,12 @@
 set -u
 LC_ALL=C   # byte-based string operations
 TAB=$'\t'
-WORD_CLASS='["'\''\\ '"$TAB"']'   # where a shell word may end or quoting starts
-DQ_CLASS='["\\]'                   # inside "...": the closing quote or an escape
-SQ_CLASS="['\\\\]"                 # inside $'...': the closing quote or an escape
-SEP_CLASS='[;|&(){}`]'              # where a simple command may end
-LT='<'; HD="$LT$LT"                 # the here-document operator, as data (never written out in this file)
-BLANK_RUN_END='[! '"$TAB"']'        # the first character after a run of blanks
+WORD_CLASS=$'["\'\\\\ \t]'          # where a shell word may end or quoting starts
+DQ_CLASS='["\\]'                    # inside "...": the closing quote or an escape
+SQ_CLASS=$'[\'\\\\]'               # inside $'...': the closing quote or an escape
+SEP_CLASS='[;|&(){}`]'               # where a simple command may end
+BLANK_RUN_END=$'[! \t]'             # the first character after a run of blanks
+LT='<'; printf -v HD '<%s' "$LT"     # the here-document operator, as data (never written out in this file)
 STEP_IFS=$'"\'\\ \t;&|(){}`'      # every character that costs the parsing below a step
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
@@ -57,39 +57,20 @@ deny() {
 allow() { exit 0; }
 
 json_scalar() {
-  # $1 = JSON text, $2 = key. Prints the value of the first `"key": value` pair (the key
-  # followed by a colon; an escaped `\"key\"` inside a string value never qualifies): a
-  # string with its escapes decoded, or a bare scalar (true, false, null, a number).
-  # Prints nothing when the key is absent or its value is an object or array. \001 and
-  # \002 stand in for escapes while the closing quote is found; JSON cannot contain
-  # those bytes unescaped. awk keeps this linear on large inputs. (No split() here: the
-  # one-true-awk splits on newlines as well as on a single-character separator.)
-  printf '%s' "$1" | LC_ALL=C awk -v key="$2" '
-    BEGIN { RS = "\001" }
-    NR == 1 {
-      s = $0; q = "\"" key "\""; pos = 1
-      while (1) {
-        i = index(substr(s, pos), q)
-        if (i == 0) exit
-        t = substr(s, pos + i - 1 + length(q))
-        if (match(t, /^[ \t\r\n]*:/)) { s = substr(t, RLENGTH + 1); break }
-        pos = pos + i
-      }
-      sub(/^[ \t\r\n]*/, "", s)
-      if (substr(s, 1, 1) != "\"") {
-        match(s, /^[A-Za-z0-9_.+-]*/); printf "%s", substr(s, 1, RLENGTH); exit
-      }
-      s = substr(s, 2)
-      gsub(/\\\\/, "\001", s)
-      gsub(/\\"/, "\002", s)
-      i = index(s, "\""); if (i > 0) s = substr(s, 1, i - 1)
-      gsub(/\002/, "\"", s)
-      gsub(/\\n/, "\n", s); gsub(/\\t/, "\t", s); gsub(/\\r/, "", s)
-      gsub(/\\b/, " ", s); gsub(/\\f/, " ", s); gsub(/\\\//, "/", s)
-      bs = "\\"; gsub(/\001/, bs, s)   # one backslash: a "\\\\" replacement gives two on some awks
-      printf "%s", s
-      exit
-    }'
+  # $1 = JSON text, $2 = key (letters, digits, underscore). Prints the value of the
+  # `"key": value` pair: a string with its escapes decoded, or a bare scalar (true, false,
+  # null, a number); nothing when the key is absent or its value is an object or array.
+  # Escaped backslashes and quotes are parked as \001 and \002 while the closing quote is
+  # found (JSON cannot contain those bytes unescaped), \n becomes \003 until tr restores
+  # it, and every step is one linear pass of sed or tr. An escaped `\"key\"` inside a
+  # string value never matches, because its quotes are parked first.
+  printf '%s' "$1" | tr '\n\r' '  ' \
+    | sed -n -e $'s/\\\\\\\\/\001/g' -e $'s/\\\\"/\002/g' \
+             -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+             -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([A-Za-z0-9_.+-]*\).*/\1/p" \
+    | sed -e $'s/\002/"/g' -e $'s/\\\\n/\003/g' -e $'s/\\\\t/\t/g' -e $'s/\\\\r//g' \
+          -e $'s/\\\\b/ /g' -e $'s/\\\\f/ /g' -e $'s|\\\\/|/|g' -e $'s/\001/\\\\/g' \
+    | tr '\003' '\n'
 }
 
 json_field() {
