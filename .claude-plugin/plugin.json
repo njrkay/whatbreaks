@@ -4,11 +4,11 @@
   "version": "0.1.0",
   "description": "Risk review for Terraform and OpenTofu plans: what an apply will destroy, replace, expose, or weaken, ranked by severity with a fix for each finding. In Claude Code and Cowork an apply gate blocks terraform apply until the exact plan file has been reviewed.",
   "author": {
-    "name": "TODO_AUTHOR_NAME",
-    "url": "https://github.com/TODO_GITHUB_HANDLE"
+    "name": "njrkay",
+    "url": "https://github.com/njrkay"
   },
-  "homepage": "https://github.com/TODO_GITHUB_HANDLE/whatbreaks",
-  "repository": "https://github.com/TODO_GITHUB_HANDLE/whatbreaks",
+  "homepage": "https://github.com/njrkay/whatbreaks",
+  "repository": "https://github.com/njrkay/whatbreaks",
   "license": "MIT",
   "keywords": [
     "terraform",
