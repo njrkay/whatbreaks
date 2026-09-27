@@ -3,8 +3,8 @@
 Run from the plugin root (uses your Claude credentials; see `claude plugin eval --help`):
 
 ```bash
-claude plugin eval . --allow-tools Write "Bash(python3 *)"           # all cases, with/without-plugin comparison
-claude plugin eval . --tag smoke --ablation none --allow-tools Write "Bash(python3 *)"   # quick check
+claude plugin eval . --allow-tools Write "Bash(python3 skills/review/scripts/analyze_plan.py *)"           # all cases, with/without-plugin comparison
+claude plugin eval . --tag smoke --ablation none --allow-tools Write "Bash(python3 skills/review/scripts/analyze_plan.py *)"   # quick check
 ```
 
 One directory per case. `prompt.md` is what a person would type, with the plan JSON pasted in;

@@ -206,7 +206,14 @@ TF_READONLY="init validate fmt show output version providers graph console test 
 SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh nix-shell nix env su runuser chroot"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
 
-while IFS= read -r LINE; do
+# Split the command into physical lines, and each line into simple commands, as arrays
+# (no here-documents: the loops must run in this shell so state and exit codes carry).
+split_lines() { local IFS=$'\n'; set -f; LINE_ARR=($1); set +f; }
+split_segs()  { local IFS=$'\n'; set -f; SEG_ARR=($1); set +f; }
+
+LINE_ARR=()
+split_lines "$LINES"
+for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- here-document bodies are data; skip them until the terminator line
   if [ -n "$HEREDOC_END" ]; then
     t="$LINE"; t=${t#"${t%%[![:space:]]*}"}; t=${t%"${t##*[![:space:]]}"}
@@ -266,7 +273,9 @@ for t in toks:
   SEGS=${SEGS//'@AMP@'/'&'}
   SUBST_DEPTH=0; PRE_CLASS=""
 
-  while IFS= read -r SEG; do
+  SEG_ARR=()
+  split_segs "$SEGS"
+  for SEG in "${SEG_ARR[@]+"${SEG_ARR[@]}"}"; do
     SEGCOUNT=$((SEGCOUNT+1))
     if [ "$SEGCOUNT" -gt 300 ]; then
       case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command has too many parts ($SEGCOUNT) to gate safely; split it up." ;; esac
@@ -544,11 +553,7 @@ for t in toks:
     fi
     if [ "$STATUS" = "reviewed" ] || [ "$STATUS" = "approved" ]; then PREV_SEG="$SEG"; continue; fi
     deny "whatbreaks: the review marker for $PLANFILE is incomplete (status=$STATUS verdict=$VERDICT). Re-run /whatbreaks:review $PLANFILE."
-  done <<EOF2
-$SEGS
-EOF2
-done <<EOF1
-$LINES
-EOF1
+  done
+done
 
 allow

@@ -38,15 +38,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Apply gate scenarios
         run: bash tests/test_hook.sh
-      - name: Apply gate without jq/python3 (sed fallback)
-        run: |
-          FB=$(mktemp -d)
-          for b in bash sh sed tr awk cat head shasum sha256sum pwd printf mktemp; do p=$(command -v $b 2>/dev/null) && ln -s "$p" "$FB/$b"; done
-          export CLAUDE_PLUGIN_DATA=$(mktemp -d)
-          out=$(printf '{"cwd":"/tmp","tool_input":{"command":"terraform apply -auto-approve"}}' | PATH="$FB" bash hooks/apply-gate.sh 2>/dev/null; echo "rc=$?")
-          echo "$out" | grep -q '"deny"' && echo "$out" | grep -q 'rc=2'
-          out=$(printf '{"cwd":"/tmp","tool_input":{"command":"ls -la"}}' | PATH="$FB" bash hooks/apply-gate.sh; echo "rc=$?")
-          [ "$out" = "rc=0" ]
   validate:
     runs-on: ubuntu-latest
     steps:

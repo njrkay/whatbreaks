@@ -20,6 +20,10 @@ JUNK = {".DS_Store", "Thumbs.db", "desktop.ini", "__MACOSX"}
 LAUNCHERS = re.compile(r"\b(npx|bunx|pnpm dlx|yarn dlx|uvx|pipx run|uv run|pip install|npm install)\b")
 SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|"
                     r"xox[baprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9-]{20,})")
+HEREDOC_LOOP = re.compile(r"^\s*done\s*<<[^<]|^\s*while\s+(IFS=\S*\s+)?read\b.*<<[^<]", re.M)
+PWD_REF = re.compile(r"\$\{?PWD\b")
+FETCH_EXEC = re.compile(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|\b(ba|z)?sh\s+<\(\s*(curl|wget)\b")
+CRED_NAME = re.compile(r"(?<![A-Za-z0-9_])(PASS(WORD)?|PASSWD|SECRET(_KEY)?|API_KEY|ACCESS_KEY|AUTH_TOKEN)=")
 HOOK_EVENTS = {"PreToolUse", "PostToolUse", "Stop", "SubagentStop", "SessionStart", "SessionEnd",
                "UserPromptSubmit", "PreCompact", "Notification", "PermissionRequest", "PostToolUseFailure",
                "TeammateIdle", "TaskCompleted", "MessageDisplay", "PreModelSwitch", "PostModelSwitch",
@@ -109,6 +113,21 @@ def main() -> int:
             problems.append(f"{r} mentions a package launcher/installer: {LAUNCHERS.search(s).group(0)}")
         if SECRET.search(s):
             problems.append(f"{r} looks like it contains a credential")
+        # patterns the directory scanner holds for review (seen on a real validation run)
+        if r == "tests/check_submission.py":
+            continue  # this file holds the patterns themselves
+        if ext == ".sh" and HEREDOC_LOOP.search(s):
+            problems.append(f"{r}: here-document read by a loop (held for review); iterate an array instead")
+        if PWD_REF.search(s):
+            problems.append(f"{r}: references the PWD variable (read as the installer's working directory)")
+        if FETCH_EXEC.search(s):
+            problems.append(f"{r}: download-and-execute shell pattern")
+        if CRED_NAME.search(s):
+            problems.append(f"{r}: variable named like a credential: {CRED_NAME.search(s).group(0)}")
+
+    # icon
+    if not any(os.path.isfile(os.path.join(ROOT, ".claude-plugin", f"icon.{e}")) for e in ("svg", "png")):
+        warnings.append("no .claude-plugin/icon.svg or icon.png (listing falls back to a generic icon)")
 
     # case-insensitive duplicates
     lowered = {}

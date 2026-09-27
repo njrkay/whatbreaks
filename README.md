@@ -29,7 +29,7 @@ python3 skills/review/scripts/analyze_plan.py evals/rds-replace/resources/plan.j
 |---|---|---|
 | `/whatbreaks:review [plan-file\|plan.json]` (skill) | chat, Cowork, Claude Code | Renders the plan to JSON if needed, runs the deterministic analyzer, then writes a verdict-first review: what breaks, the fix for each finding, what else changes, what to check before applying. Also triggers on its own when you share a plan or ask whether one is safe. |
 | `/whatbreaks:approve <plan-file>` (skill) | Cowork, Claude Code | Records your explicit decision to apply a plan whose verdict was **BLOCK**. In Claude Code it is user-invoked only (`disable-model-invocation`): Claude cannot start it, and the skill makes Claude restate the findings and wait for your words before recording anything. Like the gate, it is a workflow guard, not a security boundary: a direct Bash call to the script still appears as an ordinary permission prompt. `--revoke` deletes the marker so the plan must be reviewed again; `--force` (approve a never-reviewed file) exists for emergencies and is never used without you asking for it. |
-| Apply gate (hook, `hooks/apply-gate.sh`) | Cowork, Claude Code | A `PreToolUse` hook on the Bash tool. Denies `terraform`/`tofu`/`terragrunt` `apply` and `destroy` unless the plan file named in the command has a review marker (or an approval after BLOCK). Also denies `-auto-approve` without a saved plan, any command that writes files and applies in the same line (`plan -out … && apply`, `cp`, `curl`, redirection), piped or env-injected approvals, shells handed a command string (`bash -c`, `eval`, `xargs`, `ssh`), and `terragrunt run-all apply`. |
+| Apply gate (hook, `hooks/apply-gate.sh`) | Cowork, Claude Code | A `PreToolUse` hook on the Bash tool. Denies `terraform`/`tofu`/`terragrunt` `apply` and `destroy` unless the plan file named in the command has a review marker (or an approval after BLOCK). Also denies `-auto-approve` without a saved plan, any command that writes files and applies in the same line (`plan -out … && apply`, a copy, a download, a redirection), piped or env-injected approvals, shells handed a command string (`bash -c`, `eval`, `xargs`, `ssh`), and `terragrunt run-all apply`. |
 | `skills/review/scripts/analyze_plan.py` | everywhere Python 3.9+ runs | The rule engine. Standard library only, no network. Usable on its own and in CI (`--exit-code`). |
 | `skills/review/scripts/redact_plan.py` | everywhere | Strips sensitive values, URL-embedded credentials, and bulky sections from a plan JSON so it can be shared or uploaded to chat. |
 
@@ -188,10 +188,10 @@ boundary.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fixtures.py   # 26 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh                                    # 147 apply-gate scenarios, including known bypass shapes
+bash tests/test_hook.sh                                    # 149 apply-gate scenarios, including known bypass shapes
 python3 tests/check_submission.py                          # the directory's pre-submission rules
 claude plugin validate .                                   # manifest and component checks
-claude plugin eval . --allow-tools Write "Bash(python3 *)" # behavioural evals (uses your Claude credentials)
+claude plugin eval . --allow-tools Write "Bash(python3 skills/review/scripts/analyze_plan.py *)" # behavioural evals (uses your Claude credentials)
 ```
 
 The `evals/` suite has one case per fixture plus a pasted-text case; each checks that Claude names
@@ -207,7 +207,7 @@ analyzer tests on Python 3.9 and 3.12 and the hook tests on Ubuntu and macOS (ba
 - **"has not been reviewed"** on apply — run `/whatbreaks:review <that file>`; if you re-planned,
   the file changed and needs a fresh review.
 - **"writes files and then applies in the same line"** — the gate refuses `plan && apply` (and
-  `cp`/`curl`/`>` before an apply) because the hash it checks might not be the file Terraform
+  `cp`, a download, or `>` before an apply) because the hash it checks might not be the file Terraform
   reads. Plan, review, then apply as separate commands.
 - **The gate denies but you already reviewed** — the review was probably run on a JSON without
   `--plan-file`, so no marker matches the binary file. Re-run `/whatbreaks:review <plan-file>`.

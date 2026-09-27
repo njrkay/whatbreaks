@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="WhatBreaks">
+  <rect x="0" y="0" width="128" height="128" rx="26" fill="#0f172a"/>
+  <!-- plan lines -->
+  <rect x="24" y="30" width="80" height="12" rx="6" fill="#e2e8f0"/>
+  <rect x="24" y="86" width="80" height="12" rx="6" fill="#e2e8f0"/>
+  <!-- the broken line: left piece intact, right piece displaced and highlighted -->
+  <rect x="24" y="58" width="34" height="12" rx="6" fill="#e2e8f0"/>
+  <rect x="70" y="63" width="34" height="12" rx="6" fill="#fb923c" transform="rotate(8 87 69)"/>
+  <!-- crack -->
+  <path d="M60 52 L66 62 L60 70 L66 80" fill="none" stroke="#fb923c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
