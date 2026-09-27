@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)cloudfront|origin access|cdn|keep .* private"
+pattern: "cloudfront|origin access|cdn|keep .* private"
+flags: i
 target: last_message
 ---

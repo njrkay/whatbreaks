@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)full (plan|terraform plan)|without -target|drift"
+pattern: "full (plan|terraform plan)|without -target|drift"
+flags: i
 target: last_message
 ---

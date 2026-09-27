@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i):sub\\b|sub condition|ExternalId|PrincipalOrgID|specific (principal|account)"
+pattern: ":sub\\b|sub condition|ExternalId|PrincipalOrgID|specific (principal|account)"
+flags: i
 target: last_message
 ---

@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)moved|removed|namespace"
+pattern: "moved|removed|namespace"
+flags: i
 target: last_message
 ---

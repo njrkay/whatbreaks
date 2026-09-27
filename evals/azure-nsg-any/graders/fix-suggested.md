@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)bastion|specific|restrict|narrow(er)? scope|least"
+pattern: "bastion|specific|restrict|narrow(er)? scope|least"
+flags: i
 target: last_message
 ---

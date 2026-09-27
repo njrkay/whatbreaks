@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)\\bBLOCK\\b|\\bcritical\\b"
+pattern: "\\bBLOCK\\b|\\bcritical\\b"
+flags: i
 target: last_message
 ---

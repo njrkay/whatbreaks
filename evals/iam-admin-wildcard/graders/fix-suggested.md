@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)least.privilege|specific actions|scope|narrow"
+pattern: "least.privilege|specific actions|scope|narrow"
+flags: i
 target: last_message
 ---

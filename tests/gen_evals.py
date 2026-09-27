@@ -40,7 +40,7 @@ CASES = {
         rubric="PASS if the response explains that the destroy/create pairs are caused by the count-to-for_each address change (an index/key shift, not a real removal) and proposes `moved` blocks mapping each old index to its new key so nothing is recreated. FAIL if it treats the destroys as intended or does not mention moved blocks."),
     "clean-plan": dict(
         prompt="Anything risky in this plan? New Lambda plus a tag change.",
-        verdict=r"(?i)\bOK\b|no (destructive|risky|dangerous)|safe|low.risk|nothing risky", must_not=r"(?i)\bBLOCK\b|\bCRITICAL\b",
+        verdict=r"(?i)\bOK\b|no (destructive|risky|dangerous)|safe|low.risk|nothing risky", must_not=r"verdict\W{0,12}(BLOCK|WARN)\b",
         resource=r"aws_lambda_function\.report", fix=None, tags=["smoke", "aws", "clean"],
         rubric="PASS if the response says the plan contains no destructive, exposing, or privilege-widening changes (only a Lambda and log group creation and a tag update) and gives an OK / safe-to-apply verdict without inventing risks. FAIL if it flags a critical or high risk or refuses to give a verdict."),
     "destroy-plan": dict(
@@ -137,13 +137,17 @@ def write(path: str, text: str) -> None:
 def graders(case_dir: str, c: dict) -> None:
     g = os.path.join(case_dir, "graders")
     q = json.dumps  # JSON strings are valid double-quoted YAML scalars and escape backslashes/quotes safely
-    write(os.path.join(g, "verdict.md"), f"---\ntype: regex\npattern: {q(c['verdict'])}\ntarget: last_message\n---\n")
+
+    def rx(pattern: str) -> str:
+        # JavaScript regex has no inline (?i); the eval runner takes `flags: i` instead.
+        return q(pattern.replace("(?i)", "")) + "\nflags: i"
+    write(os.path.join(g, "verdict.md"), f"---\ntype: regex\npattern: {rx(c['verdict'])}\ntarget: last_message\n---\n")
     if c.get("must_not"):
         write(os.path.join(g, "no-false-alarm.md"),
-              f"---\ntype: regex\npattern: {q(c['must_not'])}\nmatch: not_contains\ntarget: last_message\n---\n")
-    write(os.path.join(g, "resource-named.md"), f"---\ntype: regex\npattern: {q(c['resource'])}\ntarget: last_message\n---\n")
+              f"---\ntype: regex\npattern: {rx(c['must_not'])}\nmatch: not_contains\ntarget: last_message\n---\n")
+    write(os.path.join(g, "resource-named.md"), f"---\ntype: regex\npattern: {rx(c['resource'])}\ntarget: last_message\n---\n")
     if c.get("fix"):
-        write(os.path.join(g, "fix-suggested.md"), f"---\ntype: regex\npattern: {q(c['fix'])}\ntarget: last_message\n---\n")
+        write(os.path.join(g, "fix-suggested.md"), f"---\ntype: regex\npattern: {rx(c['fix'])}\ntarget: last_message\n---\n")
     skill_re = r'"skill"\s*:\s*"(?:[\w-]+:)?review"'
     write(os.path.join(g, "skill-fired.md"), "---\ntype: tool_used\ntool: Skill\ninput_match: " + q(skill_re) + "\n---\n")
     write(os.path.join(g, "rubric.md"), f"---\ntype: llm\nfocus: last_message\n---\n\n{c['rubric']}\n")

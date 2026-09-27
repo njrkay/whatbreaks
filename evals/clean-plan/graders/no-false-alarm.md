@@ -1,6 +1,7 @@
 ---
 type: regex
-pattern: "(?i)\\bBLOCK\\b|\\bCRITICAL\\b"
+pattern: "verdict\\W{0,12}(BLOCK|WARN)\\b"
+flags: i
 match: not_contains
 target: last_message
 ---

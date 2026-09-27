@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)workspace|state|backend|stop|do not apply|don't apply"
+pattern: "workspace|state|backend|stop|do not apply|don't apply"
+flags: i
 target: last_message
 ---

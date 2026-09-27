@@ -1,5 +1,6 @@
 ---
 type: regex
-pattern: "(?i)deletion_protection|backup_retention"
+pattern: "deletion_protection|backup_retention"
+flags: i
 target: last_message
 ---
