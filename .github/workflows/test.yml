@@ -36,8 +36,6 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Diagnose awk parser (temporary)
-        run: bash tests/diag_awk.sh
       - name: Apply gate scenarios
         run: bash tests/test_hook.sh
   validate:
