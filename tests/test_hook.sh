@@ -12,7 +12,7 @@ export CLAUDE_PLUGIN_DATA="$TMP/data"
 export CLAUDE_PLUGIN_ROOT="$ROOT"
 unset CLAUDE_PLUGIN_OPTION_APPLY_GATE
 mkdir -p "$TMP/infra"
-n_pass=0; n_fail=0; SLOWEST=0.00; SLOWEST_LABEL=""
+n_ok=0; n_bad=0; SLOWEST=0.00; SLOWEST_LABEL=""
 
 PY=$(command -v python3)
 run_hook() {
@@ -29,14 +29,14 @@ expect() {
   # $1 = expected, $2 = command, $3 = cwd, $4 = label
   local got line
   line=$(run_hook "$2" "$3"); got=${line% *}; LAST_SECS=${line##* }
-  if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s %5ss  %s\n' "$1" "$LAST_SECS" "$4"
+  if [ "$got" = "$1" ]; then n_ok=$((n_ok+1)); printf 'PASS  %-6s %5ss  %s\n' "$1" "$LAST_SECS" "$4"
   else
-    n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "${2:0:300}"
+    n_bad=$((n_bad+1)); printf 'FAIL  want %s got %s  %s\n   cmd: %s\n' "$1" "$got" "$4" "${2:0:300}"
     # surface failures as annotations in GitHub Actions, where the log itself may be hard to reach
     [ -n "${GITHUB_ACTIONS:-}" ] && printf '::error title=apply-gate scenario::want %s got %s (%ss): %s -- %s\n' "$1" "$got" "$LAST_SECS" "$4" "$(printf '%s' "${2:0:200}" | tr '\n%' ' ~')"
   fi
   # the hook must stay far inside its 30 s timeout on every input (a timed-out hook allows)
-  if [ "${LAST_SECS%.*}" -ge 8 ]; then n_fail=$((n_fail+1)); printf 'FAIL  %ss is too slow for the hook timeout  %s\n' "$LAST_SECS" "$4"; fi
+  if [ "${LAST_SECS%.*}" -ge 8 ]; then n_bad=$((n_bad+1)); printf 'FAIL  %ss is too slow for the hook timeout  %s\n' "$LAST_SECS" "$4"; fi
   if [ "${LAST_SECS%.*}" -gt "${SLOWEST%.*}" ] || { [ "${LAST_SECS%.*}" -eq "${SLOWEST%.*}" ] && [ "${LAST_SECS#*.}" -gt "${SLOWEST#*.}" ]; }; then SLOWEST=$LAST_SECS; SLOWEST_LABEL=$4; fi
 }
 
@@ -198,9 +198,9 @@ expect deny "\$'terraform' apply tfplan" "$TMP/infra" "ANSI-C quoted binary"
 expect deny 'git checkout other && terraform apply ok.tfplan' "$TMP/infra" "git checkout before apply"
 expect deny 'git stash pop && terraform apply ok.tfplan' "$TMP/infra" "git stash pop before apply"
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply ok.tfplan"}}' "$TMP/infra" | env -u HOME bash "$HOOK" 2>/dev/null); rc=$?
-if [ "$rc" -eq 0 ] && [ -z "$out" ]; then n_pass=$((n_pass+1)); echo "PASS  allow  HOME unset does not crash"; else n_fail=$((n_fail+1)); echo "FAIL  HOME unset: rc=$rc out=$out"; fi
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then n_ok=$((n_ok+1)); echo "PASS  allow  HOME unset does not crash"; else n_bad=$((n_bad+1)); echo "FAIL  HOME unset: rc=$rc out=$out"; fi
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply ok.tfplan"}}' "$TMP/infra" | env -u CLAUDE_PLUGIN_DATA bash "$HOOK" 2>/dev/null); rc=$?
-if [ "$rc" -eq 2 ]; then n_pass=$((n_pass+1)); echo "PASS  deny   CLAUDE_PLUGIN_DATA unset fails closed"; else n_fail=$((n_fail+1)); echo "FAIL  CLAUDE_PLUGIN_DATA unset: rc=$rc"; fi
+if [ "$rc" -eq 2 ]; then n_ok=$((n_ok+1)); echo "PASS  deny   CLAUDE_PLUGIN_DATA unset fails closed"; else n_bad=$((n_bad+1)); echo "FAIL  CLAUDE_PLUGIN_DATA unset: rc=$rc"; fi
 
 # ===== fourth round: variable-named binaries, quoting handled by the built-in tokenizer, size guards
 expect deny 'TF=terraform; $TF apply tfplan' "$TMP/infra" "binary named through a variable"
@@ -248,8 +248,8 @@ expect deny 'terraform apply block.tfplan' "$TMP/infra" "approval revoked"
 # --- approve refuses unreviewed plans unless forced
 printf 'never-reviewed' > "$TMP/infra/new.tfplan"
 if python3 "$APPROVE" "$TMP/infra/new.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null 2>&1; then
-  n_fail=$((n_fail+1)); echo "FAIL  approve accepted an unreviewed plan"
-else n_pass=$((n_pass+1)); echo "PASS  approve refuses unreviewed plan"; fi
+  n_bad=$((n_bad+1)); echo "FAIL  approve accepted an unreviewed plan"
+else n_ok=$((n_ok+1)); echo "PASS  approve refuses unreviewed plan"; fi
 
 # --- hostile plan file names must still deny with valid JSON (an invalid JSON deny would be treated as non-blocking)
 printf 'x' > "$TMP/infra/we\"ird.tfplan"
@@ -268,8 +268,8 @@ unset CLAUDE_PLUGIN_OPTION_APPLY_GATE
 # --- output is valid JSON when denying
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply -auto-approve"}}' "$TMP" | bash "$HOOK" 2>/dev/null)
 if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["permissionDecision"]=="deny"'; then
-  n_pass=$((n_pass+1)); echo "PASS  deny output is valid JSON"
-else n_fail=$((n_fail+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
+  n_ok=$((n_ok+1)); echo "PASS  deny output is valid JSON"
+else n_bad=$((n_bad+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
 
 # ===== without jq the hook parses its JSON input and the marker files itself: same decisions
 FB=$(mktemp -d)
@@ -297,7 +297,7 @@ rm -rf "$FB"
 
 echo
 echo "slowest scenario: ${SLOWEST}s (${SLOWEST_LABEL})"
-[ -n "${GITHUB_ACTIONS:-}" ] && printf '::notice title=apply-gate timing::%s passed, %s failed; slowest %ss (%s); bash %s\n' "$n_pass" "$n_fail" "$SLOWEST" "$SLOWEST_LABEL" "$BASH_VERSION"
+[ -n "${GITHUB_ACTIONS:-}" ] && printf '::notice title=apply-gate timing::%s passed, %s failed; slowest %ss (%s); bash %s\n' "$n_ok" "$n_bad" "$SLOWEST" "$SLOWEST_LABEL" "$BASH_VERSION"
 echo
-echo "$n_pass passed, $n_fail failed"
-[ "$n_fail" -eq 0 ]
+echo "$n_ok passed, $n_bad failed"
+[ "$n_bad" -eq 0 ]

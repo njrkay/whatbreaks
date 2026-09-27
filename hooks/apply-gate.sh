@@ -30,13 +30,13 @@ set -u
 LC_ALL=C   # byte-based string operations
 printf -v TAB '\t'; printf -v NL '\n'          # a tab and a newline, as data
 printf -v C1 '\001'; printf -v C2 '\002'; printf -v C3 '\003'   # placeholder bytes for the JSON parser
-WORD_CLASS="[\"'\\\\ $TAB]"                  # where a shell word may end or quoting starts
+printf -v WORD_CLASS '[%s\\\\ \t]' "\"'"     # where a shell word may end or quoting starts
 DQ_CLASS='["\\]'                          # inside "...": the closing quote or an escape
 SQ_CLASS="['\\\\]"                        # inside a dollar-quoted word: the closing quote or an escape
 SEP_CLASS='[;|&(){}`]'                     # where a simple command may end
-BLANK_RUN_END="[! $TAB]"                   # the first character after a run of blanks
-LT='<'; printf -v HD '<%s' "$LT"           # the here-document operator, as data (never written out in this file)
-STEP_IFS="\"'\\ $TAB;&|(){}\`"            # every character that costs the parsing below a step
+printf -v BLANK_RUN_END '[! \t]'          # the first character after a run of blanks
+printf -v HD '%s%s' '<' '<'                # the here-document operator, as data (never written out in this file)
+printf -v STEP_IFS '%s\\ \t;&|(){}`' "\"'"  # every character that costs the parsing below a step
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
 # timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
@@ -397,7 +397,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       while [ $k -lt "${#HT[@]}" ]; do
         tok="${HT[$k]}"
         case "$tok" in
-          "$HD$LT"*) ;;                                     # a here-string carries no body
+          "$HD<"*) ;;                                       # a here-string carries no body
           "$HD"|"$HD-") if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END="${HT[$((k+1))]}"; fi; break ;;
           "$HD"*) tok=${tok#"$HD"}; tok=${tok#-}; HEREDOC_END="$tok"; break ;;
         esac
