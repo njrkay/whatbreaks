@@ -1,0 +1,146 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "helm_release.app",
+          "mode": "managed",
+          "type": "helm_release",
+          "name": "app",
+          "provider_name": "registry.terraform.io/hashicorp/helm",
+          "schema_version": 0,
+          "values": {
+            "name": "app",
+            "chart": "app-v2",
+            "repository": "https://charts.example.com",
+            "version": "2.0.0",
+            "namespace": "prod"
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "kubernetes_config_map.settings",
+          "mode": "managed",
+          "type": "kubernetes_config_map",
+          "name": "settings",
+          "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+          "schema_version": 0,
+          "values": {
+            "id": "prod/settings",
+            "data": {
+              "LOG_LEVEL": "debug"
+            }
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "kubernetes_namespace.prod",
+      "mode": "managed",
+      "type": "kubernetes_namespace",
+      "name": "prod",
+      "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "id": "prod",
+          "metadata": [
+            {
+              "name": "prod",
+              "labels": {
+                "env": "prod"
+              }
+            }
+          ]
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      },
+      "action_reason": "delete_because_no_resource_config"
+    },
+    {
+      "address": "helm_release.app",
+      "mode": "managed",
+      "type": "helm_release",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/helm",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "id": "app",
+          "name": "app",
+          "chart": "app",
+          "repository": "https://charts.example.com",
+          "version": "1.4.0",
+          "namespace": "prod"
+        },
+        "after": {
+          "name": "app",
+          "chart": "app-v2",
+          "repository": "https://charts.example.com",
+          "version": "2.0.0",
+          "namespace": "prod"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "replace_paths": [
+          [
+            "chart"
+          ]
+        ]
+      },
+      "action_reason": "replace_because_cannot_update"
+    },
+    {
+      "address": "kubernetes_config_map.settings",
+      "mode": "managed",
+      "type": "kubernetes_config_map",
+      "name": "settings",
+      "provider_name": "registry.terraform.io/hashicorp/kubernetes",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "prod/settings",
+          "data": {
+            "LOG_LEVEL": "info"
+          }
+        },
+        "after": {
+          "id": "prod/settings",
+          "data": {
+            "LOG_LEVEL": "debug"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

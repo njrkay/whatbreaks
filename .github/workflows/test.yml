@@ -1,0 +1,29 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Analyzer fixtures
+        run: python3 tests/test_fixtures.py
+      - name: Apply gate scenarios
+        run: bash tests/test_hook.sh
+      - name: Generated files are up to date
+        run: |
+          python3 tests/gen_fixtures.py >/dev/null
+          python3 tests/gen_reference.py >/dev/null
+          python3 tests/gen_evals.py >/dev/null
+          git diff --exit-code -- evals skills/review/references/resource-catalog.md
+      - name: Directory pre-submission rules
+        run: python3 tests/check_submission.py
+      - name: claude plugin validate
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude plugin validate .

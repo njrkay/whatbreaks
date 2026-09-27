@@ -1,0 +1,197 @@
+---
+name: partial-plan-drift
+description: "I planned with -target to just bump the Lambda memory. Good to go?"
+tags: ["aws", "plan-level"]
+max_turns: 15
+timeout_seconds: 600
+allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+---
+
+I planned with -target to just bump the Lambda memory. Good to go?
+
+This is the output of `terraform show -json tfplan`:
+
+```json
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_lambda_function.api",
+          "mode": "managed",
+          "type": "aws_lambda_function",
+          "name": "api",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "id": "api",
+            "function_name": "api",
+            "memory_size": 512
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_lambda_function.api",
+      "mode": "managed",
+      "type": "aws_lambda_function",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "api",
+          "function_name": "api",
+          "memory_size": 256
+        },
+        "after": {
+          "id": "api",
+          "function_name": "api",
+          "memory_size": 512
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": false,
+  "errored": false,
+  "resource_drift": [
+    {
+      "address": "aws_security_group.web",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "sg-0abc",
+          "name": "web",
+          "vpc_id": "vpc-0abc",
+          "ingress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "https",
+              "from_port": 443,
+              "to_port": 443,
+              "protocol": "tcp",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            }
+          ],
+          "egress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "",
+              "from_port": 0,
+              "to_port": 0,
+              "protocol": "-1",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            }
+          ],
+          "tags": {}
+        },
+        "after": {
+          "id": "sg-0abc",
+          "name": "web",
+          "vpc_id": "vpc-0abc",
+          "ingress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "https",
+              "from_port": 443,
+              "to_port": 443,
+              "protocol": "tcp",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            },
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "ssh for debugging",
+              "from_port": 22,
+              "to_port": 22,
+              "protocol": "tcp",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            }
+          ],
+          "egress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "description": "",
+              "from_port": 0,
+              "to_port": 0,
+              "protocol": "-1",
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": [],
+              "self": false
+            }
+          ],
+          "tags": {}
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_instance.old",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "old",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "id": "i-0old",
+          "instance_type": "t2.micro"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}
+```

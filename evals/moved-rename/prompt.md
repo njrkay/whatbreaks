@@ -1,0 +1,143 @@
+---
+name: moved-rename
+description: "I renamed the DynamoDB table resource in the code. The plan wants to destroy and create \u2014 is that expected?"
+tags: ["smoke", "aws", "destructive"]
+max_turns: 15
+timeout_seconds: 600
+allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+---
+
+I renamed the DynamoDB table resource in the code. The plan wants to destroy and create — is that expected?
+
+This is the output of `terraform show -json tfplan`:
+
+```json
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_dynamodb_table.users_v2",
+          "mode": "managed",
+          "type": "aws_dynamodb_table",
+          "name": "users_v2",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "name": "users",
+            "billing_mode": "PAY_PER_REQUEST",
+            "hash_key": "user_id",
+            "attribute": [
+              {
+                "name": "user_id",
+                "type": "S"
+              }
+            ],
+            "deletion_protection_enabled": false,
+            "point_in_time_recovery": [
+              {
+                "enabled": true
+              }
+            ],
+            "tags": {
+              "env": "prod"
+            }
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_dynamodb_table.users",
+      "mode": "managed",
+      "type": "aws_dynamodb_table",
+      "name": "users",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "name": "users",
+          "billing_mode": "PAY_PER_REQUEST",
+          "hash_key": "user_id",
+          "attribute": [
+            {
+              "name": "user_id",
+              "type": "S"
+            }
+          ],
+          "deletion_protection_enabled": false,
+          "point_in_time_recovery": [
+            {
+              "enabled": true
+            }
+          ],
+          "tags": {
+            "env": "prod"
+          },
+          "id": "users",
+          "arn": "arn:aws:dynamodb:us-east-1:111111111111:table/users"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      },
+      "action_reason": "delete_because_no_resource_config"
+    },
+    {
+      "address": "aws_dynamodb_table.users_v2",
+      "mode": "managed",
+      "type": "aws_dynamodb_table",
+      "name": "users_v2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "users",
+          "billing_mode": "PAY_PER_REQUEST",
+          "hash_key": "user_id",
+          "attribute": [
+            {
+              "name": "user_id",
+              "type": "S"
+            }
+          ],
+          "deletion_protection_enabled": false,
+          "point_in_time_recovery": [
+            {
+              "enabled": true
+            }
+          ],
+          "tags": {
+            "env": "prod"
+          }
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}
+```

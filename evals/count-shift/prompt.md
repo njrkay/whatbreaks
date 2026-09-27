@@ -1,0 +1,249 @@
+---
+name: count-shift
+description: "Why does this plan destroy my three workers? I just switched them from count to for_each and didn't change anything else."
+tags: ["smoke", "aws", "destructive"]
+max_turns: 15
+timeout_seconds: 600
+allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+---
+
+Why does this plan destroy my three workers? I just switched them from count to for_each and didn't change anything else.
+
+This is the output of `terraform show -json tfplan`:
+
+```json
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_instance.worker[\"a\"]",
+          "mode": "managed",
+          "type": "aws_instance",
+          "name": "worker",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "ami": "ami-0abc",
+            "instance_type": "t3.micro",
+            "subnet_id": "subnet-0abc",
+            "tags": {
+              "Name": "worker-a"
+            }
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "aws_instance.worker[\"b\"]",
+          "mode": "managed",
+          "type": "aws_instance",
+          "name": "worker",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "ami": "ami-0abc",
+            "instance_type": "t3.micro",
+            "subnet_id": "subnet-0abc",
+            "tags": {
+              "Name": "worker-b"
+            }
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "aws_instance.worker[\"c\"]",
+          "mode": "managed",
+          "type": "aws_instance",
+          "name": "worker",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "ami": "ami-0abc",
+            "instance_type": "t3.micro",
+            "subnet_id": "subnet-0abc",
+            "tags": {
+              "Name": "worker-c"
+            }
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_instance.worker[0]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-0"
+          },
+          "id": "i-000"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      },
+      "index": 0,
+      "action_reason": "delete_because_wrong_repetition"
+    },
+    {
+      "address": "aws_instance.worker[1]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-1"
+          },
+          "id": "i-001"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      },
+      "index": 1,
+      "action_reason": "delete_because_wrong_repetition"
+    },
+    {
+      "address": "aws_instance.worker[2]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-2"
+          },
+          "id": "i-002"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      },
+      "index": 2,
+      "action_reason": "delete_because_wrong_repetition"
+    },
+    {
+      "address": "aws_instance.worker[\"a\"]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-a"
+          }
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      },
+      "index": "a"
+    },
+    {
+      "address": "aws_instance.worker[\"b\"]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-b"
+          }
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      },
+      "index": "b"
+    },
+    {
+      "address": "aws_instance.worker[\"c\"]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "ami": "ami-0abc",
+          "instance_type": "t3.micro",
+          "subnet_id": "subnet-0abc",
+          "tags": {
+            "Name": "worker-c"
+          }
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      },
+      "index": "c"
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}
+```

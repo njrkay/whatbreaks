@@ -1,0 +1,17 @@
+{
+  "description": "whatbreaks apply gate: denies terraform/tofu/terragrunt apply and destroy until the exact plan file has been reviewed with /whatbreaks:review (or approved with /whatbreaks:approve after a BLOCK verdict). Turn off with the plugin's apply_gate option.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/apply-gate.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

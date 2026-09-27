@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: partial-plan-drift
+context:
+  add_dirs: [resources]

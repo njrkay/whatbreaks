@@ -1,0 +1,37 @@
+{
+  "name": "whatbreaks",
+  "displayName": "What Breaks",
+  "version": "0.1.0",
+  "description": "Risk review for Terraform and OpenTofu plans: what an apply will destroy, replace, expose, or weaken, ranked by severity with a fix for each finding. In Claude Code and Cowork an apply gate blocks terraform apply until the exact plan file has been reviewed.",
+  "author": {
+    "name": "TODO_AUTHOR_NAME",
+    "url": "https://github.com/TODO_GITHUB_HANDLE"
+  },
+  "homepage": "https://github.com/TODO_GITHUB_HANDLE/whatbreaks",
+  "repository": "https://github.com/TODO_GITHUB_HANDLE/whatbreaks",
+  "license": "MIT",
+  "keywords": [
+    "terraform",
+    "opentofu",
+    "terragrunt",
+    "infrastructure-as-code",
+    "iac",
+    "plan-review",
+    "blast-radius",
+    "security",
+    "devops",
+    "sre",
+    "aws",
+    "gcp",
+    "azure",
+    "kubernetes"
+  ],
+  "userConfig": {
+    "apply_gate": {
+      "type": "boolean",
+      "title": "Block terraform apply until the plan is reviewed",
+      "description": "When on, a hook denies terraform, tofu, and terragrunt apply/destroy in Claude Code and Cowork until the exact plan file has been reviewed with /whatbreaks:review (or approved with /whatbreaks:approve after a BLOCK verdict). Turn off to keep only the review skills.",
+      "default": true
+    }
+  }
+}

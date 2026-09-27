@@ -1,0 +1,15 @@
+# eval runs
+evals/results/
+# python
+__pycache__/
+*.pyc
+# OS junk (the directory validator rejects these)
+.DS_Store
+Thumbs.db
+desktop.ini
+__MACOSX/
+# local terraform artifacts if you test in-repo
+*.tfplan
+*.tfstate
+*.tfstate.backup
+.terraform/
