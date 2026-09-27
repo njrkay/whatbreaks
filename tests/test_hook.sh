@@ -17,7 +17,7 @@ n_ok=0; n_bad=0; SLOWEST=0.00; SLOWEST_LABEL=""
 PY=$(command -v python3)
 run_hook() {
   # $1 = command, $2 = cwd -> prints "<decision> <seconds>". HOOK_PATH, when set, is the
-  # PATH the runner and the hook see (see the no-jq block).
+  # PATH the runner and the hook see (see the restricted-PATH block).
   if [ -n "${HOOK_PATH:-}" ]; then
     printf '%s' "$1" | PATH="$HOOK_PATH" "$PY" "$ROOT/tests/run_hook.py" "$HOOK" "$2"
   else
@@ -103,7 +103,7 @@ expect deny 'echo terraform apply tfplan | bash' "$TMP/infra" "echo | bash"
 expect deny 'echo tfplan | xargs terraform apply' "$TMP/infra" "xargs"
 expect deny 'find . -name tfplan -exec terraform apply {} \;' "$TMP/infra" "find -exec"
 expect deny 'ssh prod "terraform apply -auto-approve"' "$TMP/infra" "ssh remote apply"
-expect deny 'aws-vault exec prod -- terraform apply tfplan' "$TMP/infra" "aws-vault wrapper"
+expect deny 'session-wrapper exec prod -- terraform apply tfplan' "$TMP/infra" "credential-helper style wrapper"
 expect deny 'sudo -u deploy terraform apply tfplan' "$TMP/infra" "sudo -u wrapper"
 expect deny 'timeout -s KILL 60 terraform apply tfplan' "$TMP/infra" "timeout with signal option"
 expect deny 'mise exec -- terraform apply tfplan' "$TMP/infra" "mise exec wrapper"
@@ -271,27 +271,28 @@ if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); ass
   n_ok=$((n_ok+1)); echo "PASS  deny output is valid JSON"
 else n_bad=$((n_bad+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
 
-# ===== without jq the hook parses its JSON input and the marker files itself: same decisions
+# ===== with nothing on PATH but bash and a hash tool, every decision must be the same:
+# the hook depends on no other program
 FB=$(mktemp -d)
-for b in bash sh sed tr awk cat head shasum sha256sum pwd printf mktemp; do p=$(command -v "$b" 2>/dev/null) && ln -s "$p" "$FB/$b"; done
+for b in bash sha256sum shasum; do p=$(command -v "$b" 2>/dev/null) && ln -s "$p" "$FB/$b"; done
 cp "$ROOT/evals/clean-plan/resources/plan.json" "$TMP/infra/ok2.tfplan"
 python3 "$ANALYZER" "$TMP/infra/ok2.tfplan" --plan-file "$TMP/infra/ok2.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
 python3 "$ANALYZER" "$ROOT/evals/destroy-plan/resources/plan.json" --plan-file "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
 HOOK_PATH="$FB"
-expect deny  'echo "x"; terraform apply -auto-approve' "$TMP" "no-jq: auto-approve with quotes in the command"
-expect allow 'ls -la' "$TMP" "no-jq: unrelated command"
-expect allow 'terraform apply ok2.tfplan' "$TMP/infra" "no-jq: reviewed plan read from the marker"
-expect deny  'terraform apply tfplan' "$TMP/infra" "no-jq: unreviewed plan"
-expect allow $'cat > README.md <<EOF\nterraform apply -auto-approve\nEOF\nterraform apply ok2.tfplan' "$TMP/infra" "no-jq: newlines and a heredoc body"
-expect deny  $'terraform apply\ttfplan' "$TMP/infra" "no-jq: tab between words"
-expect deny  'terraform apply we"ird.tfplan' "$TMP/infra" "no-jq: quote inside the command"
-expect deny  'terraform apply back\\slash.tfplan' "$TMP/infra" "no-jq: backslashes inside the command"
-expect deny  'terraform apply block.tfplan' "$TMP/infra" "no-jq: BLOCK verdict read from the marker"
+expect deny  'echo "x"; terraform apply -auto-approve' "$TMP" "bare PATH: auto-approve with quotes in the command"
+expect allow 'ls -la' "$TMP" "bare PATH: unrelated command"
+expect allow 'terraform apply ok2.tfplan' "$TMP/infra" "bare PATH: reviewed plan read from the marker"
+expect deny  'terraform apply tfplan' "$TMP/infra" "bare PATH: unreviewed plan"
+expect allow $'cat > README.md <<EOF\nterraform apply -auto-approve\nEOF\nterraform apply ok2.tfplan' "$TMP/infra" "bare PATH: newlines and a heredoc body"
+expect deny  $'terraform apply\ttfplan' "$TMP/infra" "bare PATH: tab between words"
+expect deny  'terraform apply we"ird.tfplan' "$TMP/infra" "bare PATH: quote inside the command"
+expect deny  'terraform apply back\\slash.tfplan' "$TMP/infra" "bare PATH: backslashes inside the command"
+expect deny  'terraform apply block.tfplan' "$TMP/infra" "bare PATH: BLOCK verdict read from the marker"
 python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --reason "test" >/dev/null
-expect allow 'terraform apply block.tfplan' "$TMP/infra" "no-jq: approval read from the marker"
+expect allow 'terraform apply block.tfplan' "$TMP/infra" "bare PATH: approval read from the marker"
 python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --revoke >/dev/null
-expect deny  "echo $(yes 'a' | head -n 3900 | tr '\n' ' ')&& terraform apply tfplan" "$TMP/infra" "no-jq: thousands of plain words under the cap"
-expect deny  "$(yes 'true' | head -n 290; printf 'terraform apply tfplan')" "$TMP/infra" "no-jq: hundreds of lines"
+expect deny  "echo $(yes 'a' | head -n 3900 | tr '\n' ' ')&& terraform apply tfplan" "$TMP/infra" "bare PATH: thousands of plain words under the cap"
+expect deny  "$(yes 'true' | head -n 290; printf 'terraform apply tfplan')" "$TMP/infra" "bare PATH: hundreds of lines"
 unset HOOK_PATH
 rm -rf "$FB"
 

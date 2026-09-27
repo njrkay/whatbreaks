@@ -27,6 +27,7 @@ SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|gh
 # in a hook script: the here-document operator (spelled in two pieces so that this file does
 # not contain it), an inline interpreter program, or a string assembled around a variable
 HDOC_OP = "<" * 2
+SUBST_OP = "$" + "("   # command (or arithmetic) substitution opener
 HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php|awk)\s+(-[a-z]*[ceEf](?=\s|$)|-(?=\s|$)|-v\s)", re.M)
 MIXED_QUOTE_VAR = re.compile(r"""'"\$[A-Za-z_{]|"'"\$[A-Za-z_{]""")
 DOLLAR_QUOTE = re.compile(r"(?<!')\$'")
@@ -124,6 +125,8 @@ def main() -> int:
             if HDOC_OP in s:
                 problems.append(f"{r}: the here-document operator appears literally (the validator cannot place a quoted or commented one; build it from a variable)")
             code = "\n".join(l for l in s.splitlines() if not l.lstrip().startswith("#"))
+            if SUBST_OP in code.replace(SUBST_OP + "(", ""):   # arithmetic $(( )) is fine
+                problems.append(f"{r}: command substitution in a hook script (read as a command assembled at run time)")
             if HOOK_INLINE.search(code):
                 problems.append(f"{r}: inline interpreter program in a hook script (held for review)")
             if MIXED_QUOTE_VAR.search(code):

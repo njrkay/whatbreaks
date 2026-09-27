@@ -7,7 +7,7 @@ First release.
 - `review` skill: verdict-first risk review of Terraform / OpenTofu / Terragrunt plans from
   `terraform show -json` output (chat, Cowork, Claude Code), with a manual path for pasted plan text.
 - `approve` skill: user-only acceptance of a BLOCK verdict; `--revoke`.
-- Apply gate hook (plain bash, `jq` optional): denies `apply`/`destroy` until the exact plan file has
+- Apply gate hook (plain bash; nothing else runs but a hash tool): denies `apply`/`destroy` until the exact plan file has
   been reviewed; understands wrappers, shells, `-chdir`, chains, and fails closed, including on
   commands too large to parse within the hook timeout.
 - Deterministic analyzer (stdlib only) with destructive, safety, exposure, IAM, and plan-level rule

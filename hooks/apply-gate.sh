@@ -22,133 +22,230 @@
 #     the plan file: earlier commands must be known-harmless and must not mention the file.
 #
 # Disable with the plugin's `apply_gate` option (userConfig) — never by editing this file.
-# Compatible with bash 3.2 (macOS). Plain bash: JSON fields are read with jq when it is
-# installed and with the small parser below otherwise; shell words are split by the
-# tokenizer below. No other interpreter or file is run.
+# Compatible with bash 3.2 (macOS). Plain bash: the hook input is parsed and shell words
+# are split by the functions below; nothing is run except a hash tool (sha256sum, shasum
+# or openssl) on the plan file. No other interpreter, file, or command output is used.
 
 set -u
 LC_ALL=C   # byte-based string operations
 printf -v TAB '\t'; printf -v NL '\n'          # a tab and a newline, as data
-printf -v C1 '\001'; printf -v C2 '\002'; printf -v C3 '\003'   # placeholder bytes for the JSON parser
 printf -v WORD_CLASS '[%s\\\\ \t]' "\"'"     # where a shell word may end or quoting starts
+printf -v QUOTE_CLASS '[%s\\\\]' "\"'"       # a quote or a backslash
 DQ_CLASS='["\\]'                          # inside "...": the closing quote or an escape
 SQ_CLASS="['\\\\]"                        # inside a dollar-quoted word: the closing quote or an escape
 SEP_CLASS='[;|&(){}`]'                     # where a simple command may end
 printf -v BLANK_RUN_END '[! \t]'          # the first character after a run of blanks
 printf -v HD '%s%s' '<' '<'                # the here-document operator, as data (never written out in this file)
 printf -v STEP_IFS '%s\\ \t;&|(){}`' "\"'"  # every character that costs the parsing below a step
+printf -v QUOTE_IFS '%s\\' "\"'"           # quotes and backslashes, for counting
+printf -v SUBST_OPEN '%s%s' '$' '('        # the substitution opener, as data
+printf -v BRACE_OPEN '%s%s' '$' '{'        # the brace-expansion opener, as data
 
 # Cost discipline: the hook must finish well inside its timeout on every input, because a
 # timed-out hook does not block. bash 3.2 (macOS) implements `${x//pat/rep}` and `${x##pat}`
-# with a quadratic scan on long strings, so whole-command text work goes through tr/awk
-# (linear) and the bash below only uses prefix/suffix cuts and offsets that cost one pass.
-# The sizes it loops over are capped first (bytes, lines, parts, and words).
+# with a quadratic scan on long strings, so the code below only uses prefix/suffix cuts and
+# offsets that cost one pass, and caps the sizes it loops over first (bytes, quotes, lines,
+# parts and words). Everything is done in this shell: no command substitution, no other
+# interpreter; the only external programs are the hash tools.
 
 # ---------------------------------------------------------------- output helpers
 deny() {
   # $1 = reason. Newlines are written as @NL@. The reason is JSON-escaped so that
   # user-controlled text (a plan file name) can never produce invalid JSON, and the
   # script exits 2, which blocks the tool call even if the JSON were unreadable.
-  local reason
-  reason=$(printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/@NL@/\\n/g')
+  local reason=$1 msg=$1
+  reason=${reason//\\/\\\\}
+  reason=${reason//\"/\\\"}
+  reason=${reason//[[:cntrl:]]/}
+  reason=${reason//@NL@/\\n}
+  msg=${msg//@NL@/ }
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
-  printf '%s\n' "$1" | sed 's/@NL@/ /g' >&2
+  printf '%s\n' "$msg" >&2
   exit 2
 }
 allow() { exit 0; }
 
-json_scalar() {
-  # $1 = JSON text, $2 = key (letters, digits, underscore). Prints the value of the
-  # `"key": value` pair: a string with its escapes decoded, or a bare scalar (true, false,
-  # null, a number); nothing when the key is absent or its value is an object or array.
-  # Escaped backslashes and quotes are parked as \001 and \002 while the closing quote is
-  # found (JSON cannot contain those bytes unescaped), \n becomes \003 until tr restores
-  # it, and every step is one linear pass of sed or tr. An escaped `\"key\"` inside a
-  # string value never matches, because its quotes are parked first.
-  printf '%s' "$1" | tr '\n\r' '  ' \
-    | sed -n -e "s/\\\\\\\\/$C1/g" -e "s/\\\\\"/$C2/g" \
-             -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
-             -e "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([A-Za-z0-9_.+-]*\).*/\1/p" \
-    | sed -e "s/$C2/\"/g" -e "s/\\\\n/$C3/g" -e "s/\\\\t/$TAB/g" -e "s/\\\\r//g" \
-          -e "s/\\\\b/ /g" -e "s/\\\\f/ /g" -e "s|\\\\/|/|g" -e "s/$C1/\\\\/g" \
-    | tr '\003' '\n'
+json_string() {
+  # $1 = key. R = the string value of the first `"key": "..."` pair in INPUT with its
+  # escapes decoded, or empty when the key is absent or its value is not a string. An
+  # escaped `\"key\"` inside a string value never matches, because the quote after the
+  # name is preceded by a backslash there. The text is scanned in 1 KiB windows (an escape
+  # cut by a window boundary is carried over); each window's text is gathered in a small
+  # string and the windows are joined once at the end, so the cost stays linear: bash
+  # walks the whole string on every cut, so cuts must be made on short strings.
+  local s key="\"$1\"" pre c win acc i n esc
+  local -a parts
+  R=""
+  case "$INPUT" in *"$key"*) ;; *) return 0 ;; esac
+  s=${INPUT#*"$key"}
+  pre=${s%%[![:space:]]*}; s=${s:${#pre}}
+  [ "${s:0:1}" = ":" ] || return 0
+  s=${s:1}
+  pre=${s%%[![:space:]]*}; s=${s:${#pre}}
+  [ "${s:0:1}" = '"' ] || return 0
+  s=${s:1}
+  n=${#s}; i=0; esc=0; parts=()
+  while [ "$i" -lt "$n" ]; do
+    win=${s:i:1024}; i=$((i+${#win}))
+    acc=""
+    while [ -n "$win" ]; do
+      if [ "$esc" -eq 0 ]; then
+        pre=${win%%$DQ_CLASS*}
+        acc="$acc$pre"
+        win=${win:${#pre}}
+        [ -z "$win" ] && break
+        c=${win:0:1}; win=${win:1}
+        if [ "$c" = '"' ]; then i=$n; break; fi   # the closing quote
+        esc=1                                     # a backslash: the next character is escaped
+        [ -z "$win" ] && break                    # ... and it starts the next window
+      fi
+      c=${win:0:1}; win=${win:1}; esc=0           # the character after a backslash
+      case "$c" in
+        n) acc="$acc$NL" ;;
+        t) acc="$acc$TAB" ;;
+        r|b|f) ;;
+        u) acc="$acc"'\u' ;;                      # \uXXXX is left as written; it cannot form a shell word boundary
+        *) acc="$acc$c" ;;
+      esac
+    done
+    parts+=("$acc")
+  done
+  if [ "${#parts[@]}" -gt 0 ]; then local IFS=''; R="${parts[*]}"; fi
 }
 
-json_field() {
-  # $1 = jq path, $2 = key name for the built-in parser -> the field of the hook input
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$INPUT" | jq -r "$1 // empty" 2>/dev/null
-  else
-    json_scalar "$INPUT" "$2"
+dequote() {
+  # R = $1 with every quote and backslash removed (windowed, joined once: linear)
+  local s="$1" pre win acc i=0 n=${#1}
+  local -a parts
+  R=""; parts=()
+  while [ "$i" -lt "$n" ]; do
+    win=${s:i:1024}; i=$((i+${#win}))
+    acc=""
+    while [ -n "$win" ]; do
+      pre=${win%%$QUOTE_CLASS*}
+      acc="$acc$pre"
+      win=${win:${#pre}}
+      [ -z "$win" ] && break
+      win=${win:1}
+    done
+    parts+=("$acc")
+  done
+  if [ "${#parts[@]}" -gt 0 ]; then local IFS=''; R="${parts[*]}"; fi
+}
+
+count_words() {
+  # R = how many pieces $1 falls into on the characters in $2, stopping just past $3
+  local IFS="$2" n=0 w
+  set -f
+  # shellcheck disable=SC2034  # only the count matters
+  for w in $1; do
+    n=$((n+1))
+    [ "$n" -gt "$3" ] && break
+  done
+  set +f
+  R=$n
+}
+
+read_marker() {
+  # $1 = marker file (one key per line, written by the review scripts). Sets M_APPROVED,
+  # M_VERDICT and M_STATUS from the last matching lines; a key that only appears escaped
+  # inside a string value (\"status\") has no quote right after its name and never matches.
+  local line lead v
+  M_APPROVED=""; M_VERDICT=""; M_STATUS=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    lead=${line%%[![:space:]]*}; line=${line:${#lead}}   # the key starts the line
+    case "$line" in
+      '"approved":'*|'"verdict":'*|'"status":'*)
+        v=${line#*:}
+        lead=${v%%[![:space:]]*}; v=${v:${#lead}}
+        v=${v#\"}; v=${v%%[\",]*}
+        case "$line" in
+          '"approved":'*) M_APPROVED=$v ;;
+          '"verdict":'*) M_VERDICT=$v ;;
+          *) M_STATUS=$v ;;
+        esac ;;
+    esac
+  done < "$1"
+}
+
+gate_by_hash() {
+  # Runs as the consumer of the hash tool's output, with PLANFILE, BIN, MARKER_DIR set.
+  # Reads the hash, checks the marker, and either denies (exit 2) or returns 0.
+  local HASH rest MARKER
+  IFS=' ' read -r HASH rest || HASH=""
+  [ -z "$HASH" ] && deny "whatbreaks: cannot hash $PLANFILE, so the review cannot be verified. $HOWTO"
+  MARKER="$MARKER_DIR/$HASH.json"
+  if [ ! -f "$MARKER" ]; then
+    deny "whatbreaks: $PLANFILE has not been reviewed (no review marker for sha256 ${HASH:0:12}). Run /whatbreaks:review $PLANFILE first. Re-running plan produces a new file that needs its own review."
   fi
-}
-
-sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
-  elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | awk '{print $NF}'
-  else echo ""; fi
-}
-
-marker_field() {
-  # $1 = marker file, $2 = key -> prints the value lowercased, or nothing
-  local text
-  if command -v jq >/dev/null 2>&1; then
-    jq -r ".$2 // empty" "$1" 2>/dev/null | tr 'A-Z' 'a-z'
-  else
-    text=$(cat "$1" 2>/dev/null) || text=""
-    json_scalar "$text" "$2" | tr 'A-Z' 'a-z'
-  fi
+  read_marker "$MARKER"
+  case "$M_APPROVED" in [Tt][Rr][Uu][Ee]) return 0 ;; esac
+  case "$M_VERDICT$M_STATUS" in
+    *[Bb][Ll][Oo][Cc][Kk]*)
+      deny "whatbreaks: the review of $PLANFILE ended in BLOCK (critical findings). Do not work around this. Restate the critical findings to the user; if they still want to apply, they must run /whatbreaks:approve $PLANFILE themselves. Only then is $BIN apply $PLANFILE allowed." ;;
+  esac
+  case "$M_STATUS" in [Rr][Ee][Vv][Ii][Ee][Ww][Ee][Dd]|[Aa][Pp][Pp][Rr][Oo][Vv][Ee][Dd]) return 0 ;; esac
+  deny "whatbreaks: the review marker for $PLANFILE is incomplete (status=$M_STATUS verdict=$M_VERDICT). Re-run /whatbreaks:review $PLANFILE."
 }
 
 tokenize() {
   # Split $1 into shell words the way the shell would, removing quotes and backslash
   # escapes and expanding nothing: TOK=(...). `'...'` is literal, `"..."` honours \" \\ \$
-  # and \`, a backslash outside quotes protects the next character. An unterminated quote
-  # runs to the end of the text. Long stretches of ordinary characters are skipped in one
-  # pattern operation, so the cost grows with the number of quotes and spaces, not bytes.
+  # and \`, a backslash outside quotes protects the next character, and a dollar-quoted
+  # word honours \' and \\. An unterminated quote runs to the end of the text. The text is
+  # scanned in 1 KiB windows with the quoting state carried across them, so that every cut
+  # is made on a short string (bash walks the whole string on each cut); runs of ordinary
+  # characters and of blanks cost one step each.
   TOK=()
-  local s="$1" cur="" inword=0 pre c
-  while [ -n "$s" ]; do
-    pre=${s%%$WORD_CLASS*}
-    if [ -n "$pre" ]; then cur="$cur$pre"; inword=1; s=${s:${#pre}}; continue; fi
-    c=${s:0:1}; s=${s:1}
-    case "$c" in
-      ' '|"$TAB")
-        if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi
-        pre=${s%%$BLANK_RUN_END*}; s=${s:${#pre}} ;;   # skip the rest of the blank run in one step
-      \\)
-        if [ -n "$s" ]; then cur="$cur${s:0:1}"; s=${s:1}; fi
-        inword=1 ;;
-      \')
-        inword=1
-        if [ "${cur%\$}" != "$cur" ]; then
-          # dollar-quoting (a $ before a single-quoted word): drop the $, honour \' and \\ inside
-          cur=${cur%\$}
-          while [ -n "$s" ]; do
-            pre=${s%%$SQ_CLASS*}; cur="$cur$pre"; s=${s:${#pre}}
-            [ -z "$s" ] && break
-            c=${s:0:1}; s=${s:1}
-            [ "$c" = "'" ] && break
-            case "${s:0:1}" in \'|\\) cur="$cur${s:0:1}"; s=${s:1} ;; *) cur="$cur\\" ;; esac
-          done
-        else
-          pre=${s%%\'*}; cur="$cur$pre"
-          if [ "$pre" = "$s" ]; then s=""; else s=${s:$((${#pre}+1))}; fi
-        fi ;;
-      \")
-        inword=1
-        while [ -n "$s" ]; do
-          pre=${s%%$DQ_CLASS*}; cur="$cur$pre"; s=${s:${#pre}}
-          [ -z "$s" ] && break
-          c=${s:0:1}; s=${s:1}
-          [ "$c" = '"' ] && break
-          case "${s:0:1}" in
-            \"|\\|\$|\`) cur="$cur${s:0:1}"; s=${s:1} ;;
-            *) cur="$cur\\" ;;
-          esac
-        done ;;
-    esac
+  local s="$1" n=${#1} i=0 win pre c cur="" inword=0 mode=plain esc=0
+  while [ "$i" -lt "$n" ]; do
+    win=${s:i:1024}; i=$((i+${#win}))
+    while [ -n "$win" ]; do
+      if [ "$esc" -eq 1 ]; then                 # a backslash ended the previous window
+        esc=0; c=${win:0:1}
+        case "$mode" in
+          plain) cur="$cur$c"; win=${win:1} ;;
+          dq) case "$c" in \"|\\|\$|\`) cur="$cur$c"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+          *) case "$c" in \'|\\) cur="$cur$c"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+        esac
+        continue
+      fi
+      case "$mode" in
+        plain)
+          pre=${win%%$WORD_CLASS*}
+          if [ -n "$pre" ]; then cur="$cur$pre"; inword=1; win=${win:${#pre}}; continue; fi
+          c=${win:0:1}; win=${win:1}
+          case "$c" in
+            ' '|"$TAB")
+              if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi
+              pre=${win%%$BLANK_RUN_END*}; win=${win:${#pre}} ;;   # skip the rest of the blank run in one step
+            \\)
+              inword=1
+              if [ -n "$win" ]; then cur="$cur${win:0:1}"; win=${win:1}; else esc=1; fi ;;
+            \')
+              inword=1
+              if [ "${cur%\$}" != "$cur" ]; then cur=${cur%\$}; mode=sq; else mode=lit; fi ;;
+            \") inword=1; mode=dq ;;
+          esac ;;
+        lit)                                      # inside '...'
+          pre=${win%%\'*}; cur="$cur$pre"
+          if [ "$pre" = "$win" ]; then win=""; else win=${win:${#pre}+1}; mode=plain; fi ;;
+        dq)                                       # inside "..."
+          pre=${win%%$DQ_CLASS*}; cur="$cur$pre"; win=${win:${#pre}}
+          [ -z "$win" ] && break
+          c=${win:0:1}; win=${win:1}
+          if [ "$c" = '"' ]; then mode=plain; continue; fi
+          if [ -z "$win" ]; then esc=1; continue; fi
+          case "${win:0:1}" in \"|\\|\$|\`) cur="$cur${win:0:1}"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+        sq)                                       # inside a dollar-quoted word
+          pre=${win%%$SQ_CLASS*}; cur="$cur$pre"; win=${win:${#pre}}
+          [ -z "$win" ] && break
+          c=${win:0:1}; win=${win:1}
+          if [ "$c" = "'" ]; then mode=plain; continue; fi
+          if [ -z "$win" ]; then esc=1; continue; fi
+          case "${win:0:1}" in \'|\\) cur="$cur${win:0:1}"; win=${win:1} ;; *) cur="$cur\\" ;; esac ;;
+      esac
+    done
   done
   [ "$inword" -eq 1 ] && TOK+=("$cur")
   return 0
@@ -193,15 +290,6 @@ is_tf_binary() {
   return 1
 }
 
-count_steps() {
-  # R = how many quotes, backslashes, blank runs and separators $1 holds (one pass)
-  local IFS="$STEP_IFS"
-  set -f
-  # shellcheck disable=SC2086
-  set -- $1
-  set +f
-  R=$#
-}
 
 blank() { [ "$1" = ' ' ] || [ "$1" = "$TAB" ]; }
 
@@ -216,7 +304,7 @@ emit() {
 
 split_segments() {
   # Cut line $1 into simple commands: SEG_ARR. A segment that follows `|` is marked
-  # @PIPE@, one that starts a `$(` or backtick substitution @SUBST@, and the text after a
+  # @PIPE@, one that starts a dollar-paren or backtick substitution @SUBST@, and the text after a
   # `)` @TAIL@. `>&`, `<&` and `&>` are redirections, not separators; `{`/`}` only
   # separate as words. One pass: each cut is a prefix operation plus an offset.
   SEG_ARR=()
@@ -267,17 +355,30 @@ record_earlier() {
 }
 
 # ---------------------------------------------------------------- input
-INPUT=$(cat)
-# Parsing below is linear in the input size, but a very large input would still take longer
-# than the hook timeout (and a timed-out hook does not block): refuse it when it could
-# concern terraform at all.
+INPUT=""
+IFS= read -r -d '' INPUT || true
+# Nothing to gate unless a terraform-family name appears at all. Beyond that, a very large
+# or escape-heavy input would take longer than the hook timeout to parse (a timed-out hook
+# does not block), so it is refused when it names one.
+case "$INPUT" in
+  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*) ;;
+  *tf*) ;;
+  *) allow ;;
+esac
 if [ "${#INPUT}" -gt 262144 ]; then
   case "$INPUT" in
-    *terraform*|*tofu*|*terragrunt*|*tf*|*tgenv*) deny "whatbreaks: hook input is too large (${#INPUT} bytes) to parse safely; run the terraform step on its own." ;;
+    *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*) deny "whatbreaks: hook input is too large (${#INPUT} bytes) to parse safely; run the terraform step on its own." ;;
   esac
   allow
 fi
-CMD=$(json_field '.tool_input.command' 'command')
+count_words "$INPUT" "$QUOTE_IFS" 50000
+if [ "$R" -gt 50000 ]; then
+  case "$INPUT" in
+    *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*) deny "whatbreaks: hook input has too many quotes or escapes to parse safely; run the terraform step on its own." ;;
+  esac
+  allow
+fi
+json_string command; CMD=$R
 
 # Fail closed if the payload looks terraform-ish but could not be parsed.
 if [ -z "$CMD" ]; then
@@ -291,11 +392,14 @@ if [ -z "$CMD" ]; then
 fi
 
 # Fast path on a de-quoted copy, so terr""aform or terra\form cannot slip past it.
-FAST=$(printf '%s' "$CMD" | tr -d '"'"'"'\\')
-FASTN=" $(printf '%s' "$FAST" | tr ';&|(){}\n\t' '         ') "
-case "$FASTN" in
-  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*|*' tf '*) ;;
-  *) allow ;;
+dequote "$CMD"; FAST=$R
+case "$FAST" in
+  *terraform*|*tofu*|*terragrunt*|*tfenv*|*tgenv*) ;;
+  *)
+    case " $FAST " in
+      *[!A-Za-z0-9_./-]tf[!A-Za-z0-9_./-]*) ;;     # the `tf` alias as a word
+      *) allow ;;
+    esac ;;
 esac
 
 # A huge or very fragmented command could push the parsing below past the hook timeout, and
@@ -311,13 +415,13 @@ trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then printf "{\"hookSpecific
 
 # User switched the gate off via userConfig (CLAUDE_PLUGIN_OPTION_<KEY>).
 GATE="${CLAUDE_PLUGIN_OPTION_APPLY_GATE:-${CLAUDE_PLUGIN_OPTION_apply_gate:-true}}"
-case "$(printf '%s' "$GATE" | tr 'A-Z' 'a-z')" in
-  false|0|no|off) allow ;;
+case "$GATE" in
+  [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Oo][Ff][Ff]) allow ;;
 esac
 
-CWD=$(json_field '.cwd' 'cwd')
-[ -z "$CWD" ] && CWD=$(pwd)
-HOME="${HOME:-/nonexistent}"
+json_string cwd; CWD=$R
+[ -z "$CWD" ] && CWD=.
+HOMEDIR=~
 MARKER_DIR=""
 [ -n "${CLAUDE_PLUGIN_DATA:-}" ] && MARKER_DIR="$CLAUDE_PLUGIN_DATA/reviews"
 
@@ -383,7 +487,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- bound the work below: every quote, blank, backslash and separator costs the
   # tokenizer or the segment loop a step, and a line made of thousands of them would take
   # longer than the hook timeout (a timed-out hook does not block).
-  count_steps "$LINE"
+  count_words "$LINE" "$STEP_IFS" 4000
   SPECIALS=$((SPECIALS + R))
   if [ "$SPECIALS" -gt 4000 ]; then
     deny "whatbreaks: command has too many words, quotes or parts ($SPECIALS) to gate safely; run the terraform step on its own."
@@ -406,7 +510,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   esac
 
   LINE_COMPUTED=0
-  case "$LINE" in *'$('*|*'`'*|*'${'*) LINE_COMPUTED=1 ;; esac
+  case "$LINE" in *"$SUBST_OPEN"*|*'`'*|*"$BRACE_OPEN"*) LINE_COMPUTED=1 ;; esac
 
   SUBST_DEPTH=0; PRE_CLASS=""
   split_segments " $LINE"
@@ -419,7 +523,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
       SEG=${SEG#@TAIL@}
       if [ "$SUBST_DEPTH" -gt 0 ]; then
         SUBST_DEPTH=$((SUBST_DEPTH-1))
-        # the text after a $(...) belongs to the command that contained it
+        # the text after a substitution belongs to the command that contained it
         [ "$PRE_CLASS" = "text" ] && INHERIT_TEXT=1
       fi ;;
     esac
@@ -459,7 +563,7 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     if [ "$FIRSTBASE" = "cd" ] || [ "$FIRSTBASE" = "pushd" ]; then
       if [ $((i+1)) -lt "$N" ]; then
         d="${W[$((i+1))]}"
-        case "$d" in /*) EFFECTIVE_CWD="$d" ;; "~"*) EFFECTIVE_CWD="$HOME${d#\~}" ;; *) EFFECTIVE_CWD="$EFFECTIVE_CWD/$d" ;; esac
+        case "$d" in /*) EFFECTIVE_CWD="$d" ;; "~"*) EFFECTIVE_CWD="$HOMEDIR${d#\~}" ;; *) EFFECTIVE_CWD="$EFFECTIVE_CWD/$d" ;; esac
       fi
       LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue
     fi
@@ -671,27 +775,26 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
     if [ -n "$CHDIR" ]; then
       case "$CHDIR" in /*) BASE="$CHDIR" ;; *) BASE="$EFFECTIVE_CWD/$CHDIR" ;; esac
     fi
-    case "$PLANFILE" in /*) RESOLVED="$PLANFILE" ;; "~"*) RESOLVED="$HOME${PLANFILE#\~}" ;; *) RESOLVED="$BASE/$PLANFILE" ;; esac
+    case "$PLANFILE" in /*) RESOLVED="$PLANFILE" ;; "~"*) RESOLVED="$HOMEDIR${PLANFILE#\~}" ;; *) RESOLVED="$BASE/$PLANFILE" ;; esac
     if [ ! -f "$RESOLVED" ]; then
       deny "whatbreaks: plan file $PLANFILE was not found (looked in $BASE), so it cannot have been reviewed. With terragrunt, a relative -out path lands in .terragrunt-cache; re-plan with an absolute -out path. $HOWTO"
     fi
 
     [ -z "$MARKER_DIR" ] && deny "whatbreaks: no plugin data directory is available (CLAUDE_PLUGIN_DATA is unset), so reviews cannot be verified. Update Claude Code, or turn the gate off with the apply_gate option."
-    HASH=$(sha256_of "$RESOLVED")
-    [ -z "$HASH" ] && deny "whatbreaks: cannot hash $PLANFILE (no sha256sum, shasum, or openssl on PATH), so the review cannot be verified. $HOWTO"
-    MARKER="$MARKER_DIR/$HASH.json"
-    if [ ! -f "$MARKER" ]; then
-      deny "whatbreaks: $PLANFILE has not been reviewed (no review marker for sha256 ${HASH:0:12}). Run /whatbreaks:review $PLANFILE first. Re-running plan produces a new file that needs its own review."
+    # The hash tool's output is read by gate_by_hash at the other end of a pipe, which
+    # denies (exit 2, carried out of the pipeline) or returns 0 when this apply is allowed.
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum "$RESOLVED" | gate_by_hash
+    elif command -v shasum >/dev/null 2>&1; then
+      shasum -a 256 "$RESOLVED" | gate_by_hash
+    elif command -v openssl >/dev/null 2>&1; then
+      openssl dgst -sha256 -r "$RESOLVED" | gate_by_hash
+    else
+      deny "whatbreaks: cannot hash $PLANFILE (no sha256sum, shasum, or openssl on PATH), so the review cannot be verified. $HOWTO"
     fi
-    APPROVED=$(marker_field "$MARKER" approved)
-    VERDICT=$(marker_field "$MARKER" verdict)
-    STATUS=$(marker_field "$MARKER" status)
-    if [ "$APPROVED" = "true" ]; then PREV_SEG="$SEG"; continue; fi
-    if [ "$VERDICT" = "block" ] || [ "$STATUS" = "blocked" ]; then
-      deny "whatbreaks: the review of $PLANFILE ended in BLOCK (critical findings). Do not work around this. Restate the critical findings to the user; if they still want to apply, they must run /whatbreaks:approve $PLANFILE themselves. Only then is $BIN apply $PLANFILE allowed."
-    fi
-    if [ "$STATUS" = "reviewed" ] || [ "$STATUS" = "approved" ]; then PREV_SEG="$SEG"; continue; fi
-    deny "whatbreaks: the review marker for $PLANFILE is incomplete (status=$STATUS verdict=$VERDICT). Re-run /whatbreaks:review $PLANFILE."
+    rc=$?
+    [ "$rc" -ne 0 ] && exit "$rc"
+    PREV_SEG="$SEG"
   done
 done
 
