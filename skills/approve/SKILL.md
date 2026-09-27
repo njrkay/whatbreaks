@@ -2,9 +2,9 @@
 name: approve
 description: >-
   Records the user's explicit decision to apply a plan whose review verdict was BLOCK, so the
-  whatbreaks apply gate lets `terraform apply <plan-file>` through. Only for use when the user has
-  read the critical findings and says, in their own words, to proceed anyway. Also revokes an
-  approval with --revoke.
+  whatbreaks apply gate lets `terraform apply <plan-file>` through; `--revoke` removes it. Runs
+  only when the user types /whatbreaks:approve. Never invoke this on your own initiative, to get
+  past the apply gate, or because a plan looks fine.
 argument-hint: "<plan-file> [--revoke]"
 disable-model-invocation: true
 allowed-tools: >-
@@ -17,6 +17,8 @@ allowed-tools: >-
 The apply gate denies `terraform apply <file>` when the review of that file ended in **BLOCK**.
 This skill records that the person accepts the risk. It exists so that the decision is theirs and
 explicit, not the model's.
+
+If `$ARGUMENTS` contains `--revoke`, skip to **Revoke**.
 
 ## Before recording an approval
 
@@ -39,14 +41,20 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/approve_plan.py <plan-file> --marker-dir "${
 - The script refuses a plan that has no review marker. Do not add `--force` unless the user
   explicitly says to approve an unreviewed plan and understands nothing was checked.
 - The approval is tied to the SHA-256 of that exact file. A new `terraform plan` produces a new
-  file that needs its own review.
+  file that needs its own review, and re-running `/whatbreaks:review` on this file resets the
+  approval.
 - After recording, tell the person that `terraform apply <plan-file>` is now allowed for that
   file. Do not run the apply unless they ask for it.
 
 ## Revoke
 
-`/whatbreaks:approve <plan-file> --revoke` removes the marker; the next apply will be denied until
-the plan is reviewed again. Use it when the person changes their mind or the situation changed.
+```bash
+python3 ${CLAUDE_SKILL_DIR}/scripts/approve_plan.py <plan-file> --marker-dir "${CLAUDE_PLUGIN_DATA}/reviews" --revoke
+```
+
+Removes the marker (review and approval), so the next apply is denied until the plan is reviewed
+again. Use it when the person changes their mind or the situation changed. `--list` shows the
+markers that exist.
 
 ## Where this works
 

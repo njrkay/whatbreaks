@@ -1,0 +1,206 @@
+---
+name: ecs-deploy-routine
+description: "Standard deploy of api 1.5.0. Sanity check before I apply."
+tags: ["smoke", "aws", "clean"]
+max_turns: 15
+timeout_seconds: 600
+allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+---
+
+Standard deploy of api 1.5.0. Sanity check before I apply.
+
+This is the output of `terraform show -json tfplan`:
+
+```json
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_ecs_task_definition.api",
+          "mode": "managed",
+          "type": "aws_ecs_task_definition",
+          "name": "api",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "family": "api",
+            "container_definitions": "[{\"name\": \"api\", \"image\": \"registry.example.com/api:1.5.0\", \"essential\": true}]",
+            "cpu": "256",
+            "memory": "512",
+            "network_mode": "awsvpc",
+            "requires_compatibilities": [
+              "FARGATE"
+            ],
+            "execution_role_arn": "arn:aws:iam::111111111111:role/ecs-exec"
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "aws_ecs_service.api",
+          "mode": "managed",
+          "type": "aws_ecs_service",
+          "name": "api",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "id": "api",
+            "name": "api",
+            "desired_count": 3,
+            "task_definition": null
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "aws_secretsmanager_secret_version.api",
+          "mode": "managed",
+          "type": "aws_secretsmanager_secret_version",
+          "name": "api",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "secret_id": "arn:aws:secretsmanager:us-east-1:111111111111:secret:api",
+            "secret_string": "REDACTED"
+          },
+          "sensitive_values": {
+            "secret_string": true
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_ecs_task_definition.api",
+      "mode": "managed",
+      "type": "aws_ecs_task_definition",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "family": "api",
+          "container_definitions": "[{\"name\": \"api\", \"image\": \"registry.example.com/api:1.4.0\", \"essential\": true}]",
+          "cpu": "256",
+          "memory": "512",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "execution_role_arn": "arn:aws:iam::111111111111:role/ecs-exec",
+          "id": "api:41",
+          "arn": "arn:aws:ecs:us-east-1:111111111111:task-definition/api:41",
+          "revision": 41
+        },
+        "after": {
+          "family": "api",
+          "container_definitions": "[{\"name\": \"api\", \"image\": \"registry.example.com/api:1.5.0\", \"essential\": true}]",
+          "cpu": "256",
+          "memory": "512",
+          "network_mode": "awsvpc",
+          "requires_compatibilities": [
+            "FARGATE"
+          ],
+          "execution_role_arn": "arn:aws:iam::111111111111:role/ecs-exec"
+        },
+        "after_unknown": {
+          "requires_compatibilities": [
+            false
+          ],
+          "id": true,
+          "arn": true,
+          "revision": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "replace_paths": [
+          [
+            "container_definitions"
+          ]
+        ]
+      },
+      "action_reason": "replace_because_cannot_update"
+    },
+    {
+      "address": "aws_ecs_service.api",
+      "mode": "managed",
+      "type": "aws_ecs_service",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "api",
+          "name": "api",
+          "desired_count": 3,
+          "task_definition": "arn:aws:ecs:us-east-1:111111111111:task-definition/api:41"
+        },
+        "after": {
+          "id": "api",
+          "name": "api",
+          "desired_count": 3,
+          "task_definition": null
+        },
+        "after_unknown": {
+          "task_definition": true
+        },
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_secretsmanager_secret_version.api",
+      "mode": "managed",
+      "type": "aws_secretsmanager_secret_version",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "id": "api|v1",
+          "secret_id": "arn:aws:secretsmanager:us-east-1:111111111111:secret:api",
+          "secret_string": "REDACTED"
+        },
+        "after": {
+          "secret_id": "arn:aws:secretsmanager:us-east-1:111111111111:secret:api",
+          "secret_string": "REDACTED"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": {
+          "secret_string": true
+        },
+        "after_sensitive": {
+          "secret_string": true
+        },
+        "replace_paths": [
+          [
+            "secret_string"
+          ]
+        ]
+      },
+      "action_reason": "replace_because_cannot_update"
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}
+```

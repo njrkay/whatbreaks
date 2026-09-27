@@ -144,6 +144,7 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "triggers": {},
           "id": true
         },
         "before_sensitive": {},

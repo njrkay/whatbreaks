@@ -114,6 +114,17 @@ This is the output of `terraform show -json tfplan`:
           "deny": []
         },
         "after_unknown": {
+          "source_ranges": [
+            false
+          ],
+          "allow": [
+            {
+              "ports": [
+                false
+              ]
+            }
+          ],
+          "deny": [],
           "id": true
         },
         "before_sensitive": false,
@@ -173,7 +184,20 @@ This is the output of `terraform show -json tfplan`:
             }
           ]
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "settings": [
+            {
+              "ip_configuration": [
+                {
+                  "authorized_networks": [
+                    {},
+                    {}
+                  ]
+                }
+              ]
+            }
+          ]
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

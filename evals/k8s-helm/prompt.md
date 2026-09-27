@@ -142,7 +142,9 @@ This is the output of `terraform show -json tfplan`:
             "LOG_LEVEL": "debug"
           }
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "data": {}
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

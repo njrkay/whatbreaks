@@ -130,6 +130,7 @@
           }
         },
         "after_unknown": {
+          "triggers": {},
           "id": true
         },
         "before_sensitive": {},

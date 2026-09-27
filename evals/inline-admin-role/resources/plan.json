@@ -1,0 +1,121 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_iam_role.deploy",
+          "mode": "managed",
+          "type": "aws_iam_role",
+          "name": "deploy",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "name": "deploy",
+            "assume_role_policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"AWS\": \"arn:aws:iam::111111111111:root\"}, \"Action\": \"sts:AssumeRole\"}]}",
+            "inline_policy": [
+              {
+                "name": "all",
+                "policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Sid\": \"All\", \"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"}]}"
+              }
+            ],
+            "managed_policy_arns": [],
+            "tags": {
+              "team": "platform"
+            }
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "aws_lambda_function.deploy",
+          "mode": "managed",
+          "type": "aws_lambda_function",
+          "name": "deploy",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "schema_version": 0,
+          "values": {
+            "function_name": "deploy",
+            "runtime": "python3.12",
+            "role": "arn:aws:iam::111111111111:role/deploy"
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_iam_role.deploy",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "deploy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "deploy",
+          "assume_role_policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"AWS\": \"arn:aws:iam::111111111111:root\"}, \"Action\": \"sts:AssumeRole\"}]}",
+          "inline_policy": [
+            {
+              "name": "all",
+              "policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Sid\": \"All\", \"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"}]}"
+            }
+          ],
+          "managed_policy_arns": [],
+          "tags": {
+            "team": "platform"
+          }
+        },
+        "after_unknown": {
+          "inline_policy": [
+            {}
+          ],
+          "managed_policy_arns": [],
+          "tags": {},
+          "id": true,
+          "arn": true,
+          "unique_id": true,
+          "create_date": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_lambda_function.deploy",
+      "mode": "managed",
+      "type": "aws_lambda_function",
+      "name": "deploy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "function_name": "deploy",
+          "runtime": "python3.12",
+          "role": "arn:aws:iam::111111111111:role/deploy"
+        },
+        "after_unknown": {
+          "id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

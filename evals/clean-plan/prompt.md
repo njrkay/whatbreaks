@@ -143,7 +143,9 @@ This is the output of `terraform show -json tfplan`:
             "owner": "data-team"
           }
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "tags": {}
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

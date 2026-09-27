@@ -26,9 +26,12 @@ SECRET_NAME_RE = re.compile(
     r"(password|passwd|secret|token|private_key|privatekey|client_secret|master_password|"
     r"connection_string|access_key|secret_key|api_key|apikey|auth_token|bearer|credential|"
     r"session_token|shared_secret|preshared|psk|license_key|encryption_key|ssh_key|certificate_body|"
-    r"cert_pem|key_pem|passphrase|db_password|admin_password|root_password)",
+    r"cert_pem|key_pem|passphrase|db_password|admin_password|root_password|user_data|custom_data|"
+    r"metadata_startup_script|startup_script|bootstrap|cloud_init|kubeconfig|client_certificate|"
+    r"master_auth|webhook_url|dsn|sas_token|primary_key|secondary_key|account_key)",
     re.I,
 )
+URL_CREDS_RE = re.compile(r"(://)([^/\s:@]+):([^@\s]+)@")
 ACCOUNT_RE = re.compile(r"(?<!\d)(\d{12})(?!\d)")
 KEEP_TOP = ("format_version", "terraform_version", "resource_changes", "resource_drift",
             "output_changes", "applyable", "complete", "errored", "timestamp", "checks")
@@ -51,8 +54,12 @@ class Redactor:
         if isinstance(v, list):
             s = sens if isinstance(sens, list) else []
             return [self.value(x, s[i] if i < len(s) else None, key) for i, x in enumerate(v)]
-        if isinstance(v, str) and self.mask_accounts:
-            return ACCOUNT_RE.sub(self._account, v)
+        if isinstance(v, str):
+            if URL_CREDS_RE.search(v):
+                self.masked += 1
+                v = URL_CREDS_RE.sub(r"\1[REDACTED]:[REDACTED]@", v)
+            if self.mask_accounts:
+                v = ACCOUNT_RE.sub(self._account, v)
         return v
 
     def _account(self, m: re.Match) -> str:
@@ -96,9 +103,17 @@ def main(argv: list[str] | None = None) -> int:
 
     r = Redactor(args.mask_accounts)
     out: dict[str, Any] = {}
-    for k in KEEP_TOP + tuple(args.keep):
+    for k in KEEP_TOP:
         if k in plan:
             out[k] = plan[k]
+    for k in args.keep:
+        if k in plan:
+            # Extra sections carry no sensitivity map, so only name-based and URL redaction apply.
+            out[k] = r.value(plan[k], None, k)
+            print(f"redact_plan: kept `{k}` with name-based redaction only; it may still contain secrets "
+                  f"(e.g. HCL literals in `configuration`).", file=sys.stderr)
+    if "checks" in out:
+        out["checks"] = r.value(out["checks"], None, "checks")
     changes = []
     for rc in plan.get("resource_changes") or []:
         if not isinstance(rc, dict):

@@ -1,20 +1,24 @@
+# CI only. Nothing in this workflow runs when the plugin is installed or used.
 name: test
 on:
   push:
   pull_request:
 jobs:
-  test:
+  analyzer:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install pyyaml
+          python-version: ${{ matrix.python }}
+      - run: pip install pyyaml==6.0.2
       - name: Analyzer fixtures
         run: python3 tests/test_fixtures.py
-      - name: Apply gate scenarios
-        run: bash tests/test_hook.sh
       - name: Generated files are up to date
         run: |
           python3 tests/gen_fixtures.py >/dev/null
@@ -23,7 +27,32 @@ jobs:
           git diff --exit-code -- evals skills/review/references/resource-catalog.md
       - name: Directory pre-submission rules
         run: python3 tests/check_submission.py
-      - name: claude plugin validate
+  hook:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]   # macOS = bash 3.2 and BSD sed/awk/tr
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply gate scenarios
+        run: bash tests/test_hook.sh
+      - name: Apply gate without jq/python3 (sed fallback)
         run: |
-          npm install -g @anthropic-ai/claude-code
-          claude plugin validate .
+          FB=$(mktemp -d)
+          for b in bash sh sed tr awk cat head shasum sha256sum pwd printf mktemp; do p=$(command -v $b 2>/dev/null) && ln -s "$p" "$FB/$b"; done
+          export CLAUDE_PLUGIN_DATA=$(mktemp -d)
+          out=$(printf '{"cwd":"/tmp","tool_input":{"command":"terraform apply -auto-approve"}}' | PATH="$FB" bash hooks/apply-gate.sh 2>/dev/null; echo "rc=$?")
+          echo "$out" | grep -q '"deny"' && echo "$out" | grep -q 'rc=2'
+          out=$(printf '{"cwd":"/tmp","tool_input":{"command":"ls -la"}}' | PATH="$FB" bash hooks/apply-gate.sh; echo "rc=$?")
+          [ "$out" = "rc=0" ]
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code@2.1.283
+      - run: claude plugin validate .

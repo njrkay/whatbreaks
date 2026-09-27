@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
                     m = json.load(fh)
             except (OSError, json.JSONDecodeError):
                 continue
-            rows.append(f"{m.get('plan_sha256', '?')[:12]}  {m.get('status', '?'):9} verdict={m.get('verdict', '?'):6} "
+            rows.append(f"{str(m.get('plan_sha256') or '?')[:12]}  {str(m.get('status') or '?'):9} verdict={str(m.get('verdict') or '?'):6} "
                         f"approved={str(m.get('approved', False)).lower():5} {m.get('reviewed_at', '')}  {m.get('plan_file') or '(json only)'}")
         print("\n".join(rows) if rows else "no markers")
         return 0

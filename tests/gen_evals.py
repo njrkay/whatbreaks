@@ -88,6 +88,62 @@ CASES = {
         verdict=r"(?i)\bWARN\b|\bhigh\b|partial|-target", resource=r"aws_lambda_function\.api",
         fix=r"(?i)full (plan|terraform plan)|without -target|drift", tags=["aws", "plan-level"],
         rubric="PASS if the response notes that the plan is partial (built with -target) so dependent resources are not updated, mentions the drift (a security group changed outside Terraform and an instance no longer exists), and recommends a full plan afterwards. FAIL if it ignores the targeting or the drift."),
+    "inline-admin-role": dict(
+        prompt="New deploy role for our pipeline. Plan looks small — OK to apply?",
+        verdict=r"\bBLOCK\b|\bcritical\b", resource=r"aws_iam_role\.deploy",
+        fix=r"specific actions|least.privilege|scope|narrow", tags=["smoke", "aws", "iam"],
+        rubric="PASS if the response identifies that the new role's inline policy grants Action * on Resource * (full administrator access), rates it critical, and recommends scoping to the specific actions and resources the pipeline needs. FAIL if it calls the plan safe or misses the inline policy."),
+    "managed-arns-admin": dict(
+        prompt="Adding a managed policy to the CI role. Anything wrong here?",
+        verdict=r"\bBLOCK\b|\bcritical\b", resource=r"aws_iam_role\.ci",
+        fix=r"customer.managed|specific|scope|least", tags=["aws", "iam"],
+        rubric="PASS if the response flags that AdministratorAccess is being attached to the CI role via managed_policy_arns and recommends a scoped policy instead. FAIL if it misses the AdministratorAccess attachment."),
+    "eks-endpoint-public": dict(
+        prompt="We need to reach the EKS API from CI. Here's the change — safe?",
+        verdict=r"\bWARN\b|\bhigh\b", resource=r"aws_eks_cluster\.prod",
+        fix=r"public_access_cidrs|private endpoint|restrict", tags=["aws", "exposure"],
+        rubric="PASS if the response says the EKS API endpoint becomes reachable from the whole internet (endpoint_public_access true with public_access_cidrs 0.0.0.0/0) and recommends restricting the CIDRs or using the private endpoint. FAIL if it misses the exposure."),
+    "guardduty-disabled": dict(
+        prompt="Turning off GuardDuty in this account for now — just confirming the plan does only that.",
+        verdict=r"\bWARN\b|\bhigh\b", resource=r"aws_guardduty_detector\.main",
+        fix=r"keep .*enabled|detection|re-enable|enable", tags=["aws", "safety"],
+        rubric="PASS if the response confirms the plan disables the GuardDuty detector and clearly says this removes threat detection for the account, rating it high. FAIL if it treats it as a trivial change."),
+    "ecs-deploy-routine": dict(
+        prompt="Standard deploy of api 1.5.0. Sanity check before I apply.",
+        verdict=r"\bOK\b|routine|safe|no (destructive|risky)|low.risk", must_not=r"verdict\W{0,12}(BLOCK|WARN)\b",
+        resource=r"aws_ecs_task_definition\.api", fix=None, tags=["smoke", "aws", "clean"],
+        rubric="PASS if the response recognises this as a routine ECS deployment (new task definition revision, service pointed at it, secret version rotated), gives an OK / safe verdict, and does not warn about downtime or data loss. FAIL if it rates the task definition replacement as a serious risk."),
+    "sns-sqs-scoped": dict(
+        prompt="Wiring an SNS topic to an SQS queue. The policy has Principal * which makes me nervous — is it fine?",
+        verdict=r"\bOK\b|fine|normal|standard|expected|safe", must_not=r"verdict\W{0,12}(BLOCK|WARN)\b",
+        resource=r"aws_sqs_queue_policy\.orders", fix=r"SourceArn|condition", tags=["aws", "iam"],
+        rubric="PASS if the response explains that Principal * here is scoped by the aws:SourceArn condition to the specific SNS topic, which is the standard SNS-to-SQS pattern, and says the plan is safe to apply (perhaps suggesting to verify the topic ARN). FAIL if it flags the policy as public access."),
+    "kms-default-policy": dict(
+        prompt="New KMS key for the data bucket. Review please.",
+        verdict=r"\bOK\b|safe|standard|default", must_not=r"verdict\W{0,12}(BLOCK|WARN)\b",
+        resource=r"aws_kms_key\.data", fix=None, tags=["aws", "iam"],
+        rubric="PASS if the response recognises the key policy as the standard default (account root, kms:*) that delegates to IAM, and gives an OK verdict. FAIL if it flags the key policy as a wildcard admin grant or cross-account trust."),
+    "gcp-binding-growth": dict(
+        prompt="Adding Eve to the project owners. What does the plan do?",
+        verdict=r"\bBLOCK\b|\bcritical\b", resource=r"google_project_iam_binding\.owners",
+        fix=r"narrow|least|specific role|roles/", tags=["gcp", "iam"],
+        rubric="PASS if the response says user:eve@example.com is being granted roles/owner on the project (full control), rates it critical, and recommends a narrower role. FAIL if it misses the new owner."),
+    "k8s-cluster-admin": dict(
+        prompt="RBAC change to unblock the dev team. Review before apply.",
+        verdict=r"\bBLOCK\b|\bcritical\b", resource=r"kubernetes_cluster_role_binding\.everyone",
+        fix=r"specific group|service account|never|system:authenticated", tags=["kubernetes", "iam"],
+        rubric="PASS if the response says cluster-admin is being bound to system:authenticated (every authenticated identity in the cluster becomes an admin), rates it critical, and recommends binding to specific groups. FAIL if it misses the binding."),
+    "github-public": dict(
+        prompt="Making the platform repo public. Plan attached.",
+        verdict=r"\bWARN\b|\bhigh\b", resource=r"github_repository\.platform",
+        fix=r"secret|history|scan|confirm", tags=["github", "exposure"],
+        rubric="PASS if the response flags that the repository becomes public (code and history visible to everyone) and recommends checking for secrets in the history first. FAIL if it treats the change as cosmetic."),
+    "sub-resource-deletes": dict(
+        prompt="Cleaning up some leftovers. Is anything here dangerous?",
+        verdict=r"\bWARN\b|\bREVIEW\b|medium|moderate", must_not=r"\bCRITICAL\b|data loss",
+        resource=r"aws_route_table_association\.private_a|aws_s3_bucket_policy\.logs|aws_iam_role_policy_attachment",
+        fix=None, tags=["aws", "destructive"],
+        rubric="PASS if the response treats these three deletions (a route table association, a bucket policy, a role policy attachment) as moderate-impact configuration removals — noting possible connectivity or access loss — without claiming data loss or a critical risk. FAIL if it calls any of them critical or says data will be lost."),
     "heuristics": dict(
         prompt="Mixed plan across a couple of providers. What's the risk here?",
         verdict=r"(?i)\bBLOCK\b|\bcritical\b", resource=r"cloudflare_zone\.example",
@@ -203,6 +259,10 @@ fired, and an LLM rubric on the explanation. `pasted-text-plan` has no JSON and 
 manual review path.
 
 Cases are generated by `tests/gen_evals.py`; edit that file rather than the case files.
+
+The regex graders are deliberately loose (a BLOCK case passes on the word "critical" anywhere in
+the reply); the LLM rubric carries the judgement. Read a failing case's transcript before blaming
+the plugin.
 """
 
 

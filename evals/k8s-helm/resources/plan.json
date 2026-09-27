@@ -128,7 +128,9 @@
             "LOG_LEVEL": "debug"
           }
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "data": {}
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

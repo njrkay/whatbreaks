@@ -1,0 +1,91 @@
+---
+name: gcp-binding-growth
+description: "Adding Eve to the project owners. What does the plan do?"
+tags: ["gcp", "iam"]
+max_turns: 15
+timeout_seconds: 600
+allowed_tools: [Read, Glob, Grep, Skill, Bash, Write]
+---
+
+Adding Eve to the project owners. What does the plan do?
+
+This is the output of `terraform show -json tfplan`:
+
+```json
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_project_iam_binding.owners",
+          "mode": "managed",
+          "type": "google_project_iam_binding",
+          "name": "owners",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "id": "example-prod/roles/owner",
+            "project": "example-prod",
+            "role": "roles/owner",
+            "members": [
+              "group:platform-admins@example.com",
+              "user:eve@example.com"
+            ]
+          },
+          "sensitive_values": {}
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_project_iam_binding.owners",
+      "mode": "managed",
+      "type": "google_project_iam_binding",
+      "name": "owners",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "id": "example-prod/roles/owner",
+          "project": "example-prod",
+          "role": "roles/owner",
+          "members": [
+            "group:platform-admins@example.com"
+          ]
+        },
+        "after": {
+          "id": "example-prod/roles/owner",
+          "project": "example-prod",
+          "role": "roles/owner",
+          "members": [
+            "group:platform-admins@example.com",
+            "user:eve@example.com"
+          ]
+        },
+        "after_unknown": {
+          "members": [
+            false,
+            false
+          ]
+        },
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ],
+  "output_changes": {},
+  "configuration": {
+    "provider_config": {},
+    "root_module": {}
+  },
+  "timestamp": "2026-09-26T10:00:00Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}
+```

@@ -116,6 +116,7 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true,
           "address": true,
           "endpoint": true

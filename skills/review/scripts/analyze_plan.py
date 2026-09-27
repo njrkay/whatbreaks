@@ -111,18 +111,17 @@ OUTAGE_TYPES = {
     "aws_ecr_public_repository", "aws_transfer_server", "aws_globalaccelerator_accelerator",
     "aws_directory_service_directory", "aws_organizations_organizational_unit",
     "aws_organizations_policy", "aws_organizations_policy_attachment", "aws_iam_role",
-    "aws_iam_user", "aws_iam_policy", "aws_iam_instance_profile", "aws_iam_openid_connect_provider",
-    "aws_iam_saml_provider", "aws_kms_alias", "aws_secretsmanager_secret_version",
-    "aws_ssm_parameter", "aws_kinesis_stream", "aws_kinesis_firehose_delivery_stream",
+    "aws_iam_user", "aws_iam_instance_profile", "aws_iam_openid_connect_provider",
+    "aws_iam_saml_provider", "aws_kms_alias", "aws_kinesis_stream", "aws_kinesis_firehose_delivery_stream",
     "aws_sqs_queue", "aws_sns_topic", "aws_sfn_state_machine", "aws_mq_broker",
     "aws_cloudwatch_log_group", "aws_flow_log", "aws_glue_catalog_database",
     "aws_glue_catalog_table", "aws_sagemaker_endpoint", "aws_sagemaker_domain",
     "aws_workspaces_workspace", "aws_appsync_graphql_api", "aws_amplify_app", "aws_lambda_function",
-    "aws_launch_configuration", "aws_db_subnet_group", "aws_elasticache_subnet_group",
+    "aws_db_subnet_group", "aws_elasticache_subnet_group",
     "aws_db_parameter_group", "aws_rds_cluster_parameter_group", "aws_security_group",
     "aws_network_acl", "aws_route_table", "aws_route", "aws_vpc_peering_connection",
     "aws_vpc_endpoint", "aws_efs_mount_target", "aws_codecommit_repository",
-    "aws_codepipeline", "aws_ecs_task_definition", "aws_service_discovery_service",
+    "aws_codepipeline", "aws_service_discovery_service",
     "aws_lightsail_instance", "aws_batch_compute_environment", "aws_emr_cluster",
     "aws_bedrock_custom_model", "aws_bedrockagent_agent", "aws_bedrockagent_knowledge_base",
     # GCP
@@ -148,8 +147,7 @@ OUTAGE_TYPES = {
     "azurerm_virtual_network", "azurerm_subnet", "azurerm_public_ip", "azurerm_nat_gateway",
     "azurerm_virtual_network_gateway", "azurerm_express_route_circuit", "azurerm_application_gateway",
     "azurerm_lb", "azurerm_firewall", "azurerm_front_door", "azurerm_cdn_frontdoor_profile",
-    "azurerm_network_security_group", "azurerm_key_vault_key", "azurerm_key_vault_secret",
-    "azurerm_key_vault_certificate", "azurerm_databricks_workspace", "azurerm_data_factory",
+    "azurerm_network_security_group", "azurerm_key_vault_key", "azurerm_key_vault_certificate", "azurerm_databricks_workspace", "azurerm_data_factory",
     "azurerm_backup_protected_vm", "azurerm_backup_policy_vm", "azurerm_eventhub_namespace",
     "azurerm_servicebus_namespace", "azurerm_app_service", "azurerm_linux_web_app",
     "azurerm_windows_web_app", "azurerm_linux_function_app", "azurerm_windows_function_app",
@@ -179,23 +177,46 @@ TRIVIAL_TYPES = {
     "null_resource", "terraform_data", "local_file", "local_sensitive_file", "random_id",
     "random_string", "random_pet", "random_integer", "random_uuid", "random_shuffle",
     "time_sleep", "time_static", "time_offset", "time_rotating", "aws_ec2_tag",
-    "aws_lb_listener_certificate", "kubernetes_config_map", "kubernetes_config_map_v1",
-    "aws_cloudwatch_dashboard", "aws_ssm_document", "aws_iam_policy_attachment",
+    "aws_lb_listener_certificate",
+    "aws_cloudwatch_dashboard",
+}
+# Tier "versioned": a replace creates a new revision/version and retires the old one; this is
+# how these resources are meant to change. Replace => LOW; delete => MEDIUM (default tier).
+VERSIONED_TYPES = {
+    "aws_ecs_task_definition", "aws_secretsmanager_secret_version", "google_secret_manager_secret_version",
+    "aws_launch_template", "aws_ssm_document", "aws_lambda_layer_version",
+    "aws_ssm_parameter", "azurerm_key_vault_secret", "aws_lambda_alias", "aws_appconfig_hosted_configuration_version",
+    "google_cloud_run_v2_service_iam_binding", "aws_batch_job_definition", "aws_imagebuilder_image",
+    "aws_sagemaker_model", "aws_api_gateway_deployment", "aws_apigatewayv2_deployment",
 }
 TRIVIAL_PREFIXES = ("random_", "time_", "local_", "tls_", "archive_", "external_", "http_")
 
-# Heuristics for resource types absent from the catalogs above.
-HEURISTIC_DATA_WORDS = (
-    "database", "_db", "db_", "bucket", "volume", "disk", "table", "snapshot", "backup",
-    "filesystem", "file_system", "ledger", "vault", "spanner", "bigtable", "firestore",
-    "dynamodb", "keyspace", "datastore", "storage_account", "kms_key", "crypto_key",
-)
-HEURISTIC_OUTAGE_WORDS = (
-    "cluster", "instance", "node_pool", "nodegroup", "node_group", "zone", "gateway",
-    "load_balancer", "loadbalancer", "_lb", "vpc", "network", "subnet", "address", "eip",
+# Heuristics for resource types absent from the catalogs above. Matched on whole
+# underscore-delimited tokens after the provider prefix, so "aws_route_table_association"
+# is not "table" and "vault_token" is not "vault".
+HEURISTIC_DATA_WORDS = {
+    "database", "db", "bucket", "volume", "disk", "table", "snapshot", "backup", "filesystem",
+    "ledger", "spanner", "bigtable", "firestore", "dynamodb", "keyspace", "datastore", "kms",
+    "cache", "warehouse", "index", "collection",
+}
+HEURISTIC_DATA_PHRASES = ("file_system", "storage_account", "kms_key", "crypto_key", "key_ring", "user_pool")
+HEURISTIC_OUTAGE_WORDS = {
+    "cluster", "instance", "zone", "gateway", "vpc", "network", "subnet", "address", "eip",
     "certificate", "registry", "repository", "secret", "function", "service", "deployment",
-    "stateful_set", "distribution", "domain", "endpoint", "queue", "topic", "stream",
-    "identity", "role", "policy", "firewall", "security_group", "api",
+    "distribution", "domain", "endpoint", "queue", "topic", "stream", "identity", "role",
+    "firewall", "lb", "api", "server", "vm", "app", "job", "pipeline", "workspace", "project",
+}
+HEURISTIC_OUTAGE_PHRASES = ("node_pool", "node_group", "load_balancer", "security_group", "stateful_set")
+# Sub-resources: settings attached to something else. Deleting them is a MEDIUM (default)
+# change, never a data-loss CRITICAL, whatever their parent's name says.
+SUBRESOURCE_SUFFIXES = (
+    "_policy", "_iam_member", "_iam_binding", "_iam_policy", "_association", "_attachment",
+    "_configuration", "_notification", "_rule", "_rules", "_access_policy", "_subnet_group",
+    "_option_group", "_parameter_group", "_event_subscription", "_acl", "_cors_configuration",
+    "_logging", "_metric", "_versioning", "_website_configuration", "_ownership_controls",
+    "_target", "_lifecycle_configuration", "_tag", "_tags", "_label", "_labels", "_setting",
+    "_settings", "_route", "_mapping", "_permission", "_permissions", "_assignment", "_member",
+    "_membership", "_binding", "_alias", "_grant", "_sink", "_export", "_condition",
 )
 
 # Attributes whose change from true->false (or false->true) removes a safety mechanism.
@@ -254,15 +275,27 @@ PROTECTION_FLAGS = [
      "Keep `ignore_public_acls = true` unless the bucket is meant to be public."),
     ("restrict_public_buckets", True, "public bucket restriction", "HIGH",
      "Keep `restrict_public_buckets = true` unless the bucket is meant to be public."),
-    ("enabled", True, "enabled", "MEDIUM",
-     "Disabling a detector/recorder/rule removes the protection it provides."),
 ]
-# `enabled` is only meaningful on security-control resources:
-ENABLED_MATTERS_TYPES = (
-    "guardduty", "config_configuration_recorder", "securityhub", "macie", "inspector",
-    "cloudwatch_event_rule", "cloudwatch_metric_alarm", "backup", "wafv2", "shield",
-    "monitor", "alert", "detector", "access_analyzer", "security_center", "defender",
-)
+# Security controls whose on/off switch has a type-specific attribute name.
+# (type suffix, attribute, safe value, severity, label)
+CONTROL_TOGGLES = [
+    ("aws_guardduty_detector", "enable", True, "HIGH", "GuardDuty detector"),
+    ("aws_config_configuration_recorder_status", "is_enabled", True, "HIGH", "AWS Config recorder"),
+    ("aws_macie2_account", "status", "ENABLED", "HIGH", "Macie"),
+    ("aws_securityhub_standards_control", "control_status", "ENABLED", "MEDIUM", "Security Hub control"),
+    ("aws_accessanalyzer_analyzer", None, None, None, None),
+    ("aws_cloudwatch_metric_alarm", "actions_enabled", True, "MEDIUM", "alarm actions"),
+    ("aws_cloudwatch_event_rule", "state", "ENABLED", "LOW", "EventBridge rule"),
+    ("aws_cloudwatch_event_rule", "is_enabled", True, "LOW", "EventBridge rule"),
+    ("aws_inspector2_enabler", None, None, None, None),
+    ("aws_ebs_encryption_by_default", "enabled", True, "HIGH", "EBS encryption by default"),
+    ("aws_s3_account_public_access_block", None, None, None, None),  # covered by block_public_* flags
+    ("google_project_service", "disable_on_destroy", None, None, None),
+    ("google_compute_firewall", "disabled", False, "MEDIUM", "firewall rule"),
+    ("azurerm_security_center_subscription_pricing", "tier", "Standard", "MEDIUM", "Defender for Cloud plan"),
+    ("azurerm_monitor_diagnostic_setting", None, None, None, None),
+    ("datadog_monitor", "enable_logs_sample", None, None, None),
+]
 
 PIT_RECOVERY_KEYS = ("point_in_time_recovery",)
 
@@ -286,12 +319,13 @@ ADMIN_PORTS = {
     2181: "ZooKeeper", 2375: "Docker", 2376: "Docker", 2379: "etcd", 2380: "etcd",
     3306: "MySQL", 3389: "RDP", 4505: "Salt", 4506: "Salt", 5432: "PostgreSQL", 5601: "Kibana",
     5900: "VNC", 5984: "CouchDB", 5985: "WinRM", 5986: "WinRM", 6379: "Redis", 6443: "Kubernetes API",
-    7000: "Cassandra", 7001: "Cassandra", 8020: "HDFS", 8080: "HTTP-alt", 8443: "HTTPS-alt",
+    7000: "Cassandra", 7001: "Cassandra", 8020: "HDFS",
     8500: "Consul", 9000: "HDFS/MinIO", 9042: "Cassandra", 9092: "Kafka", 9200: "Elasticsearch",
     9300: "Elasticsearch", 10250: "kubelet", 11211: "Memcached", 27017: "MongoDB", 27018: "MongoDB",
     50070: "Hadoop",
 }
 WEB_PORTS = {80, 443}
+ALT_WEB_PORTS = {8080, 8443, 8000, 8888, 3000}
 
 OPEN_CIDRS = {"0.0.0.0/0", "::/0", "*", "internet", "any"}
 
@@ -303,6 +337,10 @@ GCP_ADMIN_ROLES = {"roles/owner": "CRITICAL", "roles/editor": "HIGH", "roles/iam
                    "roles/iam.serviceAccountKeyAdmin": "HIGH", "roles/storage.admin": "MEDIUM",
                    "roles/compute.admin": "MEDIUM", "roles/container.admin": "MEDIUM",
                    "roles/cloudsql.admin": "MEDIUM", "roles/secretmanager.admin": "HIGH"}
+AZURE_ROLE_GUIDS = {"8e3af657-a8ff-443c-a75c-2fe8c4bcb635": "owner",
+                    "b24988ac-6180-42a0-ab88-20f7382dd24c": "contributor",
+                    "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9": "user access administrator",
+                    "f58310d9-a9f6-439a-9e8d-f62e7b41a168": "role based access control administrator"}
 AZURE_ADMIN_ROLES = {"owner": "CRITICAL", "user access administrator": "CRITICAL",
                      "contributor": "HIGH", "role based access control administrator": "CRITICAL",
                      "security admin": "HIGH", "key vault administrator": "HIGH",
@@ -339,22 +377,26 @@ class Change:
 
     def __init__(self, raw: dict):
         self.raw = raw
-        self.address: str = raw.get("address", "?")
-        self.mode: str = raw.get("mode", "managed")
-        self.type: str = raw.get("type", "")
-        self.name: str = raw.get("name", "")
-        self.provider: str = raw.get("provider_name", "")
+        self.address: str = str(raw.get("address") or "?")
+        self.mode: str = str(raw.get("mode") or "managed")
+        self.type: str = str(raw.get("type") or "")
+        self.name: str = str(raw.get("name") or "")
+        self.provider: str = str(raw.get("provider_name") or "")
         self.deposed: str | None = raw.get("deposed")
-        ch = raw.get("change") or {}
-        self.actions: list[str] = list(ch.get("actions") or [])
+        ch = raw.get("change")
+        if not isinstance(ch, dict):
+            ch = {}
+        self.actions: list[str] = [str(a) for a in (ch.get("actions") or []) if a is not None]
         self.before: Any = ch.get("before")
         self.after: Any = ch.get("after")
         self.after_unknown: Any = ch.get("after_unknown") or {}
         self.before_sensitive: Any = ch.get("before_sensitive") or {}
         self.after_sensitive: Any = ch.get("after_sensitive") or {}
-        self.replace_paths: list = ch.get("replace_paths") or []
+        rp = ch.get("replace_paths") or []
+        self.replace_paths: list = [p if isinstance(p, list) else [p] for p in rp] if isinstance(rp, list) else []
         self.importing: Any = ch.get("importing")
-        self.action_reason: str = raw.get("action_reason") or ""
+        self.action_reason: str = str(raw.get("action_reason") or "")
+        self.rename_to: str | None = None  # filled by the rename pre-pass in analyze()
 
     @property
     def kind(self) -> str:
@@ -390,8 +432,29 @@ class Change:
         return default
 
     def is_unknown(self, key: str) -> bool:
+        """True only when the top-level attribute itself is unknown until apply.
+
+        Terraform's after_unknown keeps collection *structure* for known values
+        (e.g. ``"inline_policy": [{}]`` or ``"managed_policy_arns": [false, false]``),
+        so a non-empty list or dict does NOT mean the attribute is unknown.
+        """
         au = self.after_unknown
-        return isinstance(au, dict) and bool(au.get(key))
+        return isinstance(au, dict) and au.get(key) is True
+
+    def path_unknown(self, path: list) -> bool:
+        """Walk a replace_paths-style path into after_unknown; True only at a literal true."""
+        node: Any = self.after_unknown
+        for step in path:
+            if isinstance(node, dict):
+                node = node.get(str(step))
+            elif isinstance(node, list):
+                try:
+                    node = node[int(step)]
+                except (ValueError, IndexError, TypeError):
+                    return False
+            else:
+                return node is True
+        return node is True
 
     def is_sensitive(self, key: str, side: str = "after") -> bool:
         m = self.after_sensitive if side == "after" else self.before_sensitive
@@ -443,26 +506,34 @@ def _shorten(v: Any, limit: int = 120) -> Any:
 # Type classification                                                           #
 # --------------------------------------------------------------------------- #
 def classify_type(rtype: str) -> str:
-    """Return 'data', 'outage', 'trivial', or 'default' for a resource type."""
+    """Return 'data', 'outage', 'versioned', 'trivial', or 'default' for a resource type."""
     if rtype in DATA_TYPES:
         return "data"
     if rtype in OUTAGE_TYPES:
         return "outage"
+    if rtype in VERSIONED_TYPES:
+        return "versioned"
     if rtype in TRIVIAL_TYPES or rtype.startswith(TRIVIAL_PREFIXES):
         return "trivial"
     low = rtype.lower()
-    if any(w in low for w in HEURISTIC_DATA_WORDS):
+    if low.endswith(SUBRESOURCE_SUFFIXES):
+        return "default"
+    parts = low.split("_")
+    body = "_".join(parts[1:]) if len(parts) > 1 else low   # drop the provider prefix
+    tokens = set(body.split("_"))
+    if tokens & HEURISTIC_DATA_WORDS or any(p in body for p in HEURISTIC_DATA_PHRASES):
         return "data"
-    if any(w in low for w in HEURISTIC_OUTAGE_WORDS):
+    if tokens & HEURISTIC_OUTAGE_WORDS or any(p in body for p in HEURISTIC_OUTAGE_PHRASES):
         return "outage"
     return "default"
 
 
-TIER_SEVERITY = {"data": "CRITICAL", "outage": "HIGH", "default": "MEDIUM", "trivial": "LOW"}
+TIER_SEVERITY = {"data": "CRITICAL", "outage": "HIGH", "default": "MEDIUM", "versioned": "MEDIUM", "trivial": "LOW"}
 TIER_LABEL = {
     "data": "holds data (or keys/backups protecting data)",
     "outage": "is a live endpoint, control, or dependency; recreating it causes downtime or changes identifiers",
     "default": "is not in the catalog; treat as a medium-impact change until confirmed otherwise",
+    "versioned": "is revisioned by design; a new version replaces the old one",
     "trivial": "carries no state and is cheap to recreate",
 }
 
@@ -470,6 +541,11 @@ TIER_LABEL = {
 # --------------------------------------------------------------------------- #
 # Rule: destructive actions                                                     #
 # --------------------------------------------------------------------------- #
+def _one_lower(sev: str) -> str:
+    i = SEV_RANK[sev]
+    return SEVERITIES[min(i + 1, len(SEVERITIES) - 1)]
+
+
 REASON_TEXT = {
     "replace_because_cannot_update": "an attribute that cannot be updated in place changed (ForceNew)",
     "replace_because_tainted": "the resource is tainted",
@@ -477,7 +553,7 @@ REASON_TEXT = {
     "replace_by_triggers": "a `replace_triggered_by` dependency changed",
     "delete_because_no_resource_config": "the resource block was removed from the configuration (or renamed/moved without a `moved` block)",
     "delete_because_wrong_repetition": "the resource switched between count, for_each, and single-instance forms",
-    "delete_because_count_index": "the resource's count index no longer exists (count shrank or the list was reordered)",
+    "delete_because_count_index": "the resource's count index no longer exists (count shrank: index >= new count)",
     "delete_because_each_key": "the resource's for_each key no longer exists (map key removed or renamed)",
     "delete_because_no_module": "the enclosing module call was removed",
 }
@@ -498,8 +574,21 @@ def rule_destructive(ch: Change) -> list[Finding]:
         if reason:
             detail += f" Terraform's reason: {reason}."
         fix = _delete_fix(ch, tier)
+        title = f"Destroy {ch.type}"
+        if ch.rename_to:
+            # A create of the same type with matching values exists in this plan: almost
+            # certainly a rename/move that should be a `moved` block, not a destroy+create.
+            title = f"Destroy and recreate {ch.type} (looks like a rename)"
+            detail += (f" A `{ch.type}` with the same values is created as `{ch.rename_to}` in this plan, "
+                       f"so this looks like a rename or move rather than a removal; as written, the "
+                       f"existing object is destroyed and a new empty one created.")
+            fix = (f"If this is a rename, add `moved {{ from = {ch.address} / to = {ch.rename_to} }}` "
+                   f"(one attribute per line in HCL) and re-plan: the destroy/create pair becomes a no-op "
+                   f"and the object keeps its data. Confirm with the user that a rename was the intent; "
+                   f"if the old object really should go, take a backup first.")
         if ch.deposed:
             sev = "LOW"
+            title = f"Destroy {ch.type} (deposed)"
             detail = f"A deposed (already replaced) object of `{ch.address}` will be cleaned up."
             fix = "No action needed; this removes a leftover object from an earlier create-before-destroy."
         extra = _snapshot_note(ch)
@@ -507,24 +596,30 @@ def rule_destructive(ch: Change) -> list[Finding]:
             detail += " " + extra
         out.append(Finding(
             "WB-D001" if not ch.action_reason.startswith("delete_because_") else "WB-D002",
-            sev, "destructive", ch.address, ch.type, "delete",
-            f"Destroy {ch.type}" + (" (deposed)" if ch.deposed else ""),
-            detail, fix, {"action_reason": ch.action_reason}))
+            sev, "destructive", ch.address, ch.type, "delete", title, detail, fix,
+            {"action_reason": ch.action_reason, "rename_to": ch.rename_to}))
         return out
 
     if kind == "replace":
-        paths = [".".join(str(p) for p in rp) for rp in ch.replace_paths] if ch.replace_paths else []
+        paths = [_hcl_path(rp) for rp in ch.replace_paths] if ch.replace_paths else []
         reason = REASON_TEXT.get(ch.action_reason, "")
         sev = base
-        order = "create the new one first, then delete the old (create_before_destroy)" if ch.create_before_destroy \
-            else "delete the old one first, then create the new one (downtime between the two)"
+        if tier == "versioned":
+            sev = "LOW"
+            order = "create a new version and retire the old one"
+        elif ch.create_before_destroy:
+            order = "create the new one first, then delete the old (create_before_destroy)"
+        elif tier == "trivial":
+            order = "delete the old one and create a new one"
+        else:
+            order = "delete the old one first, then create the new one (downtime between the two)"
         detail = (f"`{ch.address}` ({ch.type}) will be REPLACED: Terraform will {order}. "
                   f"This resource type {TIER_LABEL[tier]}.")
         if paths:
             detail += f" Forced by: `{'`, `'.join(paths)}`."
         if reason:
             detail += f" Reason: {reason}."
-        unknown_driver = [p for p in paths if ch.is_unknown(p.split(".")[0])]
+        unknown_driver = [_hcl_path(rp) for rp in ch.replace_paths if ch.path_unknown(rp)]
         if unknown_driver:
             detail += (f" The new value of `{unknown_driver[0]}` is not known until apply, so the "
                        f"replacement is driven by a computed value.")
@@ -564,8 +659,19 @@ def _snapshot_note(ch: Change) -> str:
     if fd is True and ch.type in ("aws_s3_bucket", "google_storage_bucket", "aws_ecr_repository"):
         notes.append("`force_destroy = true`: all objects/images inside will be deleted too.")
     brp = ch.before_get("backup_retention_period")
-    if isinstance(brp, int) and brp == 0 and ch.type in ("aws_db_instance", "aws_rds_cluster"):
+    if isinstance(brp, int) and not isinstance(brp, bool) and brp == 0 and ch.type in ("aws_db_instance", "aws_rds_cluster"):
         notes.append("`backup_retention_period = 0`: there are no automated backups to restore from.")
+    if ch.type in ("aws_kms_key", "aws_kms_external_key"):
+        win = ch.before_get("deletion_window_in_days")
+        notes.append(f"KMS keys are scheduled for deletion, not deleted at once: the key stays recoverable for "
+                     f"{win if isinstance(win, int) else 'the configured'} day(s); after that, everything "
+                     f"encrypted with it is permanently unreadable.")
+    if ch.type in ("aws_secretsmanager_secret",):
+        win = ch.before_get("recovery_window_in_days")
+        if win == 0:
+            notes.append("`recovery_window_in_days = 0`: the secret is deleted immediately with no recovery window.")
+    if ch.type in ("kubernetes_namespace", "kubernetes_namespace_v1", "azurerm_resource_group", "google_project"):
+        notes.append("Deleting this container deletes EVERYTHING inside it, including resources Terraform does not manage.")
     return " ".join(notes)
 
 
@@ -596,15 +702,20 @@ def _delete_fix(ch: Change, tier: str) -> str:
 
 
 def _replace_fix(ch: Change, tier: str, paths: list[str]) -> str:
-    hints = []
-    for p in paths:
-        root = p.split(".")[0]
-        hints.append(f"`{root}`")
-    attr_hint = ", ".join(hints) if hints else "the forcing attribute"
+    if tier == "versioned":
+        return ("Expected for this resource type: each change publishes a new version/revision. Confirm the "
+                "consumers (services, rotations, launch configs) pick up the new one, then apply.")
+    if tier == "trivial":
+        return "Low impact; confirm the change is intentional."
+    attr_hint = ", ".join(f"`{p}`" for p in paths) if paths else "the forcing attribute"
+    ignore = ", ".join(paths) if paths else "<attribute>"
     fix = (f"Decide whether the change to {attr_hint} is worth recreating the resource. Options: "
-           f"revert the attribute; keep the old value with `lifecycle {{ ignore_changes = [{', '.join(p.split('.')[0] for p in paths) or '<attribute>'}] }}` "
+           f"revert the attribute; keep the live value with `lifecycle {{ ignore_changes = [{ignore}] }}` "
            f"if it drifted outside Terraform; or if the change is required, migrate data first "
-           f"(snapshot/restore, or blue-green) and use `create_before_destroy = true` to shorten downtime.")
+           f"(snapshot/restore, or blue-green).")
+    if tier == "outage":
+        fix += (" `lifecycle { create_before_destroy = true }` shortens the outage when the resource's "
+                "name/identifier can coexist twice; with a fixed name the create will collide.")
     if ch.action_reason == "replace_because_tainted":
         fix = (f"The resource is tainted. If it is healthy, run `terraform untaint {ch.address}` "
                f"instead of recreating it.")
@@ -612,11 +723,25 @@ def _replace_fix(ch: Change, tier: str, paths: list[str]) -> str:
         fix = "Replacement was explicitly requested with `-replace`; confirm this address is the intended one."
     if tier == "data":
         fix += " Take a verified backup before applying regardless."
+        if ch.type in ("aws_db_instance", "aws_rds_cluster") and any(p.startswith("master_username") for p in paths):
+            fix += (" Note: restoring from a snapshot keeps the snapshot's master username, so a different "
+                    "admin login is better created in SQL than by replacing the instance.")
     return fix
 
 
 def _short_addr(address: str) -> str:
     return address
+
+
+def _hcl_path(rp: list) -> str:
+    """Render a replace_paths entry (["vpc_config", 0, "subnet_ids"]) as vpc_config[0].subnet_ids."""
+    out = ""
+    for step in rp:
+        if isinstance(step, int) or (isinstance(step, str) and step.isdigit()):
+            out += f"[{step}]"
+        else:
+            out += ("." if out else "") + str(step)
+    return out or "<attribute>"
 
 
 # --------------------------------------------------------------------------- #
@@ -633,14 +758,16 @@ def rule_safety(ch: Change) -> list[Finding]:
     for attr, safe, label, sev, fix in PROTECTION_FLAGS:
         if label is None:
             continue
-        if attr == "enabled" and not any(t in ch.type for t in ENABLED_MATTERS_TYPES):
-            continue
         if attr not in a and attr not in b:
             continue
         av = a.get(attr)
         bv = b.get(attr)
         if ch.is_unknown(attr):
             continue
+        if ch.is_sensitive(attr) or ch.is_sensitive(attr, "before"):
+            av_s, bv_s = "«sensitive»", "«sensitive»"
+        else:
+            av_s, bv_s = hcl(av), hcl(bv)
         weakened = (bv == safe and av is not None and av != safe)
         created_unsafe = (ch.kind == "create" and av is not None and av != safe
                           and attr in ("deletion_protection", "skip_final_snapshot",
@@ -652,8 +779,8 @@ def rule_safety(ch: Change) -> list[Finding]:
         if weakened:
             out.append(Finding("WB-S001", sev, "safety", ch.address, ch.type, ch.kind,
                                f"{label} turned off on {ch.type}",
-                               f"`{ch.address}`: `{attr}` changes from `{hcl(bv)}` to `{hcl(av)}`, removing {label}.",
-                               fix, {"attribute": attr, "before": bv, "after": av}))
+                               f"`{ch.address}`: `{attr}` changes from `{bv_s}` to `{av_s}`, removing {label}.",
+                               fix, {"attribute": attr, "before": bv_s, "after": av_s}))
         elif created_unsafe:
             csev = "MEDIUM" if tier in ("data", "outage") else "LOW"
             if attr in ("block_public_acls", "block_public_policy", "ignore_public_acls",
@@ -661,8 +788,69 @@ def rule_safety(ch: Change) -> list[Finding]:
                 csev = "HIGH"
             out.append(Finding("WB-S002", csev, "safety", ch.address, ch.type, ch.kind,
                                f"Created without {label}",
+                               f"`{ch.address}` is created with `{attr} = {av_s}`.",
+                               fix, {"attribute": attr, "after": av_s}))
+
+    # Security controls switched off (type-specific attribute names)
+    for type_suffix, attr, safe, sev, label in CONTROL_TOGGLES:
+        if not attr or not ch.type.endswith(type_suffix):
+            continue
+        bv, av = b.get(attr), a.get(attr)
+        if ch.is_unknown(attr) or av is None:
+            continue
+        if ch.kind != "create" and bv == safe and av != safe:
+            out.append(Finding("WB-S010", sev, "safety", ch.address, ch.type, ch.kind,
+                               f"{label} disabled",
+                               f"`{ch.address}`: `{attr}` changes from `{hcl(bv)}` to `{hcl(av)}`.",
+                               f"Keep {label} enabled; disabling it removes detection or protection.",
+                               {"attribute": attr, "before": bv, "after": av}))
+        elif ch.kind == "create" and av != safe and sev in ("HIGH", "CRITICAL"):
+            out.append(Finding("WB-S010", "MEDIUM", "safety", ch.address, ch.type, ch.kind,
+                               f"{label} created disabled",
                                f"`{ch.address}` is created with `{attr} = {hcl(av)}`.",
-                               fix, {"attribute": attr, "after": av}))
+                               f"Create {label} enabled unless there is a documented reason not to.",
+                               {"attribute": attr, "after": av}))
+
+    # Secrets: immediate deletion window; log retention slashed
+    if ch.type == "aws_secretsmanager_secret":
+        bv, av = b.get("recovery_window_in_days"), a.get("recovery_window_in_days")
+        if isinstance(av, int) and not isinstance(av, bool) and av == 0 and bv != 0:
+            out.append(Finding("WB-S011", "MEDIUM", "safety", ch.address, ch.type, ch.kind,
+                               "Secret recovery window set to 0",
+                               f"`{ch.address}`: `recovery_window_in_days` becomes 0; a later delete is immediate and unrecoverable.",
+                               "Keep a recovery window (7-30 days) for secrets that anything depends on.",
+                               {"before": bv, "after": av}))
+    if ch.type in ("aws_cloudwatch_log_group", "google_logging_project_bucket_config"):
+        key = "retention_in_days" if ch.type == "aws_cloudwatch_log_group" else "retention_days"
+        bv, av = b.get(key), a.get(key)
+        if all(isinstance(x, int) and not isinstance(x, bool) for x in (bv, av)) and bv and (av < bv) and (av == 0 or av < 7):
+            out.append(Finding("WB-S012", "LOW", "safety", ch.address, ch.type, ch.kind,
+                               "Log retention shortened",
+                               f"`{ch.address}`: `{key}` drops from {bv} to {av} days; older logs are deleted at apply.",
+                               "Confirm audit/compliance retention requirements before shortening.", {"before": bv, "after": av}))
+
+    # Database major version upgrade applied immediately
+    if ch.type in ("aws_db_instance", "aws_rds_cluster") and ch.kind == "update":
+        bv, av = str(b.get("engine_version") or ""), str(a.get("engine_version") or "")
+        if bv and av and bv.split(".")[0] != av.split(".")[0] and not ch.is_unknown("engine_version"):
+            immediate = a.get("apply_immediately") is True
+            out.append(Finding("WB-S013", "MEDIUM" if immediate else "LOW", "safety", ch.address, ch.type, ch.kind,
+                               f"Major engine upgrade {bv} -> {av}" + (" applied immediately" if immediate else ""),
+                               f"`{ch.address}`: a major version upgrade is irreversible and restarts the database"
+                               + (" as soon as the apply runs (`apply_immediately = true`)." if immediate else " in the next maintenance window."),
+                               "Test the upgrade on a snapshot restore first; take a manual snapshot before applying.",
+                               {"before": bv, "after": av}))
+
+    # Service scaled to zero
+    if ch.type in ("aws_ecs_service", "google_cloud_run_v2_service", "kubernetes_deployment", "kubernetes_deployment_v1") and ch.kind == "update":
+        key = "desired_count" if ch.type == "aws_ecs_service" else None
+        if key:
+            bv, av = b.get(key), a.get(key)
+            if isinstance(bv, int) and isinstance(av, int) and not isinstance(av, bool) and bv > 0 and av == 0:
+                out.append(Finding("WB-S014", "MEDIUM", "safety", ch.address, ch.type, ch.kind,
+                                   "Service scaled to zero",
+                                   f"`{ch.address}`: `{key}` goes from {bv} to 0; the service stops serving.",
+                                   "Confirm this is intended (maintenance/decommission).", {"before": bv, "after": av}))
 
     # Collapse the four S3 public-access-block flags into one finding
     if ch.type == "aws_s3_bucket_public_access_block":
@@ -680,8 +868,8 @@ def rule_safety(ch: Change) -> list[Finding]:
                                {"attributes": [f.evidence.get("attribute") for f in flags]}))
 
     # Backup retention reduced
-    if "backup_retention_period" in a and isinstance(b.get("backup_retention_period"), int) \
-            and isinstance(a.get("backup_retention_period"), int):
+    if "backup_retention_period" in a and all(isinstance(x, int) and not isinstance(x, bool)
+                                                   for x in (b.get("backup_retention_period"), a.get("backup_retention_period"))):
         bv, av = b["backup_retention_period"], a["backup_retention_period"]
         if av < bv:
             sev = "HIGH" if av == 0 else "MEDIUM"
@@ -743,7 +931,7 @@ def rule_safety(ch: Change) -> list[Finding]:
             and not ch.is_unknown("permissions_boundary"):
         out.append(Finding("WB-S008", "HIGH", "safety", ch.address, ch.type, ch.kind,
                            "Permissions boundary removed",
-                           f"`{ch.address}`: the permissions boundary `{_shorten(b.get('permissions_boundary'))}` "
+                           f"`{ch.address}`: the permissions boundary `{masked(ch, 'permissions_boundary', 'before')}` "
                            f"is removed, lifting the ceiling on what this principal can be granted.",
                            "Keep the boundary unless the principal is being retired.", {}))
 
@@ -827,7 +1015,9 @@ def _parse_ports(spec: Any) -> list[tuple[int, int]]:
     return out
 
 
-def _exposure_severity(lo: int, hi: int, all_traffic: bool) -> tuple[str, str]:
+def _exposure_severity(lo: int, hi: int, all_traffic: bool, proto: str = "tcp") -> tuple[str, str]:
+    if proto in ("icmp", "icmpv6", "1", "58"):
+        return "LOW", "ICMP only (ping/traceroute); harmless by itself, but confirm it is intended"
     if all_traffic or (lo == 0 and hi == 65535):
         return "CRITICAL", "all ports/protocols"
     hits = [f"{p} ({n})" for p, n in ADMIN_PORTS.items() if lo <= p <= hi]
@@ -836,9 +1026,16 @@ def _exposure_severity(lo: int, hi: int, all_traffic: bool) -> tuple[str, str]:
     ports = set(range(lo, hi + 1)) if hi - lo < 2000 else set()
     if ports and ports <= WEB_PORTS:
         return "LOW", "public web port(s) only; normal for an internet-facing endpoint, confirm that is the intent"
+    if ports and ports <= (WEB_PORTS | ALT_WEB_PORTS):
+        return "HIGH", "alternate web port(s); fine behind a load balancer, risky on an instance"
     if hi - lo >= 100:
         return "HIGH", f"a wide range ({lo}-{hi})"
     return "HIGH", f"port(s) {lo}" + (f"-{hi}" if hi != lo else "")
+
+
+def _proto(v: Any) -> str:
+    p = str(v).lower() if v is not None else "tcp"
+    return {"-1": "all", "6": "tcp", "17": "udp", "1": "icmp", "58": "icmpv6"}.get(p, p)
 
 
 def _open_rules_aws_sg(obj: dict | None) -> set[tuple]:
@@ -851,7 +1048,7 @@ def _open_rules_aws_sg(obj: dict | None) -> set[tuple]:
         cidrs = [c for c in _as_list(blk.get("cidr_blocks")) + _as_list(blk.get("ipv6_cidr_blocks")) if _is_open(c)]
         if cidrs:
             lo, hi, all_t = _port_range(blk.get("from_port"), blk.get("to_port"), blk.get("protocol"))
-            rules.add((lo, hi, all_t, tuple(sorted(cidrs))))
+            rules.add((lo, hi, all_t, tuple(sorted(cidrs)), _proto(blk.get("protocol"))))
     return rules
 
 
@@ -864,7 +1061,7 @@ def _open_rules_aws_sg_rule(obj: dict | None) -> set[tuple]:
     cidrs = [c for c in _as_list(obj.get("cidr_blocks")) + _as_list(obj.get("ipv6_cidr_blocks")) if _is_open(c)]
     if cidrs:
         lo, hi, all_t = _port_range(obj.get("from_port"), obj.get("to_port"), obj.get("protocol"))
-        rules.add((lo, hi, all_t, tuple(sorted(cidrs))))
+        rules.add((lo, hi, all_t, tuple(sorted(cidrs)), _proto(obj.get("protocol"))))
     return rules
 
 
@@ -875,7 +1072,7 @@ def _open_rules_aws_vpc_ingress(obj: dict | None) -> set[tuple]:
     cidrs = [c for c in (obj.get("cidr_ipv4"), obj.get("cidr_ipv6")) if _is_open(c)]
     if cidrs:
         lo, hi, all_t = _port_range(obj.get("from_port"), obj.get("to_port"), obj.get("ip_protocol"))
-        rules.add((lo, hi, all_t, tuple(sorted(cidrs))))
+        rules.add((lo, hi, all_t, tuple(sorted(cidrs)), _proto(obj.get("ip_protocol"))))
     return rules
 
 
@@ -897,10 +1094,13 @@ def _open_rules_gcp_firewall(obj: dict | None) -> set[tuple]:
         if not isinstance(al, dict):
             continue
         proto = str(al.get("protocol", "tcp")).lower()
+        if proto in ("icmp", "icmpv6", "1", "58"):
+            rules.add((0, 0, False, tuple(sorted(cidrs)), proto))
+            continue
         ports = _parse_ports(al.get("ports")) or [(0, 65535)]
         for lo, hi in ports:
             all_t = proto in ("all", "-1") or (lo == 0 and hi == 65535)
-            rules.add((lo, hi, all_t, tuple(sorted(cidrs))))
+            rules.add((lo, hi, all_t, tuple(sorted(cidrs)), proto))
     return rules
 
 
@@ -920,8 +1120,8 @@ def _open_rules_azure_nsg_rule(obj: dict | None) -> set[tuple]:
     ports = ports or [(0, 65535)]
     proto = str(obj.get("protocol", "Tcp")).lower()
     for lo, hi in ports:
-        all_t = proto == "*" or (lo == 0 and hi == 65535)
-        rules.add((lo, hi, all_t, tuple(sorted(cidrs))))
+        all_t = (lo == 0 and hi == 65535)   # protocol "*" with one port is still just that port
+        rules.add((lo, hi, all_t, tuple(sorted(cidrs)), "any" if proto == "*" else proto))
     return rules
 
 
@@ -963,12 +1163,10 @@ PUBLIC_TOGGLES = [
     (("azurerm_storage_account", "azurerm_mssql_server", "azurerm_postgresql_flexible_server",
       "azurerm_key_vault", "azurerm_container_registry", "azurerm_cosmosdb_account"),
      "public_network_access_enabled", (True,), "MEDIUM", "public network access enabled"),
-    (("google_compute_instance",), "access_config", None, "LOW", "external IP on a VM"),
     (("google_storage_bucket",), "public_access_prevention", ("inherited",), "MEDIUM",
      "public access prevention not enforced"),
     (("aws_opensearch_domain", "aws_elasticsearch_domain"), "vpc_options", None, "HIGH",
      "search domain without VPC options (internet endpoint)"),
-    (("aws_eks_cluster",), "endpoint_public_access", (True,), "MEDIUM", "EKS API endpoint public"),
     (("azurerm_kubernetes_cluster",), "private_cluster_enabled", (False,), "LOW", "AKS API endpoint public"),
     (("aws_ecr_repository_policy", "aws_ecr_public_repository"), None, None, "INFO", ""),
 ]
@@ -983,19 +1181,56 @@ def rule_network(ch: Change) -> list[Finding]:
 
     ext = NETWORK_EXTRACTORS.get(ch.type)
     if ext:
+        src_attr = {"aws_security_group": "ingress", "aws_default_security_group": "ingress",
+                    "google_compute_firewall": "source_ranges", "azurerm_network_security_group": "security_rule"}.get(ch.type)
         before_rules = ext(b) if ch.kind != "create" else set()
         after_rules = ext(a)
         new_rules = after_rules - before_rules
-        for lo, hi, all_t, cidrs in sorted(new_rules):
-            sev, what = _exposure_severity(lo, hi, all_t)
-            rng = "all ports" if all_t else (f"port {lo}" if lo == hi else f"ports {lo}-{hi}")
+        for lo, hi, all_t, cidrs, proto in sorted(new_rules):
+            sev, what = _exposure_severity(lo, hi, all_t, proto)
+            rng = "all ports" if all_t else ("ICMP" if proto in ("icmp", "icmpv6") else (f"port {lo}" if lo == hi else f"ports {lo}-{hi}"))
+            if src_attr and (ch.is_sensitive(src_attr) or ch.is_sensitive(src_attr, "before")):
+                detail = f"`{ch.address}` opens inbound {rng} to the internet (source details withheld: attribute marked sensitive)."
+                evidence = {}
+            else:
+                detail = f"`{ch.address}` allows inbound {rng} from {', '.join(cidrs)} — {what}."
+                evidence = {"from_port": lo, "to_port": hi, "protocol": proto, "sources": list(cidrs)}
             out.append(Finding("WB-N001", sev, "exposure", ch.address, ch.type, ch.kind,
-                               f"Inbound {rng} open to the internet",
-                               f"`{ch.address}` allows inbound {rng} from {', '.join(cidrs)} — {what}.",
+                               f"Inbound {rng} open to the internet", detail,
                                "Restrict the source to known CIDRs, a VPN/bastion, or a security group; "
                                "for admin ports use SSM Session Manager / IAP / Bastion instead of a public "
-                               "listener.",
-                               {"from_port": lo, "to_port": hi, "sources": list(cidrs)}))
+                               "listener.", evidence))
+
+    # Nested toggles that the flat PUBLIC_TOGGLES table cannot see
+    if ch.type == "aws_eks_cluster":
+        vc_a = _first_block(a.get("vpc_config"))
+        vc_b = _first_block(b.get("vpc_config")) if ch.kind != "create" else {}
+        pub_a, pub_b = vc_a.get("endpoint_public_access"), vc_b.get("endpoint_public_access")
+        cidrs = [c for c in _as_list(vc_a.get("public_access_cidrs")) if _is_open(c)]
+        if pub_a is True and (pub_b is not True or (cidrs and not any(_is_open(c) for c in _as_list(vc_b.get("public_access_cidrs"))))):
+            sev = "HIGH" if cidrs or not vc_a.get("public_access_cidrs") else "MEDIUM"
+            out.append(Finding("WB-N003", sev, "exposure", ch.address, ch.type, ch.kind,
+                               "EKS API endpoint reachable from the internet",
+                               f"`{ch.address}`: `vpc_config[0].endpoint_public_access` is true"
+                               + (f" with public_access_cidrs {', '.join(cidrs)}" if cidrs else " with no CIDR restriction") + ".",
+                               "Restrict `public_access_cidrs` to known ranges, or use a private endpoint only.",
+                               {"public_access_cidrs": _as_list(vc_a.get("public_access_cidrs"))}))
+    if ch.type == "google_compute_instance":
+        def _has_external_ip(d: dict) -> bool:
+            return any(isinstance(ni, dict) and _as_list(ni.get("access_config")) for ni in _as_list(d.get("network_interface")))
+        if _has_external_ip(a) and (ch.kind == "create" or not _has_external_ip(b)):
+            out.append(Finding("WB-N002", "LOW", "exposure", ch.address, ch.type, ch.kind,
+                               "External IP on a VM",
+                               f"`{ch.address}` gets an external IP (`network_interface[].access_config`).",
+                               "Prefer private VMs with Cloud NAT and IAP TCP forwarding.", {}))
+    if ch.type == "github_repository":
+        became_public = (a.get("visibility") == "public" and (ch.kind == "create" or b.get("visibility") != "public")) or \
+                        (a.get("private") is False and (ch.kind == "create" or b.get("private") is not False))
+        if became_public and not ch.is_unknown("visibility"):
+            out.append(Finding("WB-N007", "HIGH", "exposure", ch.address, ch.type, ch.kind,
+                               "Repository becomes public",
+                               f"`{ch.address}` will be publicly visible (code, history, and issues).",
+                               "Confirm no secrets or private history are in the repository before making it public.", {}))
 
     # Public toggles
     for types, attr, unsafe, sev, label in PUBLIC_TOGGLES:
@@ -1071,6 +1306,11 @@ def rule_network(ch: Change) -> list[Finding]:
                                "Restrict to specific client ranges or use private endpoints / VNet rules.",
                                {"start": start, "end": end}))
     return out
+
+
+def _first_block(v: Any) -> dict:
+    v = _as_list(v)
+    return v[0] if v and isinstance(v[0], dict) else {}
 
 
 def _gcp_sql_ip_config(d: dict) -> dict:
@@ -1167,6 +1407,33 @@ def _principal_accounts(p: Any) -> list[str]:
     return accts
 
 
+SOURCE_SCOPING_CONDITION_KEYS = ("aws:sourcearn", "aws:sourceaccount", "aws:sourceowner", "aws:principalorgid",
+                                 "aws:principalaccount", "aws:sourcevpce", "aws:sourcevpc", "aws:principalarn",
+                                 "aws:sourceip", "aws:vpcsourceip", "aws:principalorgpaths", "aws:resourceorgid")
+
+
+def _condition_keys(st: dict) -> set[str]:
+    keys: set[str] = set()
+    cond = st.get("Condition")
+    if isinstance(cond, dict):
+        for op in cond.values():
+            if isinstance(op, dict):
+                keys.update(str(k).lower() for k in op.keys())
+    return keys
+
+
+def _only_local_root_principal(principal: Any) -> bool:
+    """True when the statement's only principal is this account's root (the 'enable IAM' pattern)."""
+    if not isinstance(principal, dict) or set(k.lower() for k in principal) != {"aws"}:
+        return False
+    accts = _principal_accounts(principal)
+    vals = _as_list(principal.get("AWS"))
+    if not accts or len(accts) != len(vals):
+        return False
+    return _LOCAL_ACCOUNT is not None and all(a == _LOCAL_ACCOUNT for a in accts) and \
+        all(str(v).endswith(":root") or re.fullmatch(r"\d{12}", str(v)) for v in vals)
+
+
 def _risky_signatures(doc: dict | None, is_trust: bool, is_resource_policy: bool) -> list[tuple[str, str, str, str]]:
     """Return (severity, key, title, detail) for each risky Allow statement."""
     out = []
@@ -1174,34 +1441,61 @@ def _risky_signatures(doc: dict | None, is_trust: bool, is_resource_policy: bool
         if str(st.get("Effect", "Allow")).lower() != "allow":
             continue
         has_cond = bool(st.get("Condition"))
+        cond_keys = _condition_keys(st)
+        source_scoped = any(k in SOURCE_SCOPING_CONDITION_KEYS for k in cond_keys)
         actions = _lower_list(st.get("Action"))
         shown_actions = [str(x) for x in _as_list(st.get("Action"))]
         not_actions = _lower_list(st.get("NotAction"))
         resources = _lower_list(st.get("Resource"))
         not_resources = st.get("NotResource")
         principal = st.get("Principal")
+        not_principal = st.get("NotPrincipal")
         sid = st.get("Sid", "")
         res_all = ("*" in resources) or (not resources and not_resources is None and not is_trust) \
             or (not_resources is not None)
+        label = f"Statement {sid or '(no Sid)'}"
 
-        if is_trust or (is_resource_policy and principal is not None):
+        if is_trust or (is_resource_policy and (principal is not None or not_principal is not None)):
+            if not_principal is not None and principal is None:
+                out.append(("HIGH", f"notprincipal:{sid}", "Allow with NotPrincipal (everyone except the listed)",
+                            f"{label} allows {', '.join(shown_actions[:4]) or 'actions'} to every principal except the listed ones; "
+                            f"this is effectively public."))
             if _principal_wildcard(principal):
-                sev = "HIGH" if has_cond else "CRITICAL"
-                who = "anyone (Principal *)"
-                if is_trust:
-                    title = "Role can be assumed by any AWS principal"
-                    detail = (f"Statement {sid or '(no Sid)'} trusts {who}"
-                              + (" — a Condition narrows it; verify it" if has_cond else " with no Condition; any AWS account can assume this role") + ".")
+                if source_scoped:
+                    out.append(("LOW", f"principal:*:scoped:{sid}",
+                                "Principal * scoped by a source condition",
+                                f"{label} allows {', '.join(shown_actions[:6]) or 'actions'} to any principal, limited by "
+                                f"{', '.join(sorted(k for k in cond_keys if k in SOURCE_SCOPING_CONDITION_KEYS))}. "
+                                f"This is the normal service-to-service pattern (e.g. SNS -> SQS); verify the ARN/account in the condition."))
                 else:
-                    title = "Resource policy grants public access"
-                    detail = (f"Statement {sid or '(no Sid)'} allows {', '.join(shown_actions[:6]) or 'actions'} to {who}"
-                              + (" — a Condition narrows it; verify it" if has_cond else " with no Condition") + ".")
-                out.append((sev, f"principal:*:{sid}:{','.join(actions)}", title, detail))
-            for acct in _principal_accounts(principal):
-                out.append(("MEDIUM", f"principal:acct:{acct}:{sid}",
-                            f"Cross-account trust for account {acct}",
-                            f"Statement {sid or '(no Sid)'} trusts account {acct}"
-                            + ("" if has_cond else " with no Condition (no ExternalId / SourceArn)") + "."))
+                    sev = "HIGH" if has_cond else "CRITICAL"
+                    who = "anyone (Principal *)"
+                    if is_trust:
+                        title = "Role can be assumed by any AWS principal"
+                        detail = (f"{label} trusts {who}"
+                                  + (" — a Condition narrows it; verify it" if has_cond else " with no Condition; any AWS account can assume this role") + ".")
+                    else:
+                        title = "Resource policy grants public access"
+                        detail = (f"{label} allows {', '.join(shown_actions[:6]) or 'actions'} to {who}"
+                                  + (" — a Condition narrows it; verify it" if has_cond else " with no Condition") + ".")
+                    out.append((sev, f"principal:*:{sid}:{','.join(actions)}", title, detail))
+            elif _only_local_root_principal(principal):
+                out.append(("INFO", f"principal:localroot:{sid}", "Account-level trust (this account's root)",
+                            f"{label} grants access to this account's own root principal, which delegates to IAM "
+                            f"policies in the account. This is the standard pattern for key/bucket policies and same-account roles."))
+                if is_trust:
+                    continue
+                # a same-account root statement with svc:* is the canonical KMS/S3 'enable IAM' policy
+                if any(a.endswith(":*") for a in actions) and res_all:
+                    continue
+            else:
+                for acct in _principal_accounts(principal):
+                    if _LOCAL_ACCOUNT and acct == _LOCAL_ACCOUNT:
+                        continue
+                    out.append(("MEDIUM" if not has_cond else "LOW", f"principal:acct:{acct}:{sid}",
+                                f"Trust for account {acct}" + ("" if _LOCAL_ACCOUNT else " (possibly cross-account)"),
+                                f"{label} trusts account {acct}"
+                                + ("" if has_cond else " with no Condition (no ExternalId / SourceArn / PrincipalOrgID)") + "."))
             if is_trust and isinstance(principal, dict) and principal.get("Federated"):
                 fed = " ".join(_lower_list(principal.get("Federated")))
                 cond_text = json.dumps(st.get("Condition") or {}).lower()
@@ -1220,23 +1514,28 @@ def _risky_signatures(doc: dict | None, is_trust: bool, is_resource_policy: bool
         if "*" in actions and res_all:
             out.append(("HIGH" if has_cond else "CRITICAL", f"admin:{sid}",
                         "Full administrative access (Action * on Resource *)",
-                        f"Statement {sid or '(no Sid)'} allows every action on every resource"
+                        f"{label} allows every action on every resource"
                         + (" (conditionally)" if has_cond else "") + "."))
+            continue
+        if "*" in actions and not res_all and not is_resource_policy:
+            out.append(("MEDIUM", f"allactions:{sid}", "All actions on specific resources",
+                        f"{label} allows every action (`*`) on {', '.join(resources[:3])}{'…' if len(resources) > 3 else ''}; "
+                        f"that includes delete, policy, and permission changes on those resources."))
             continue
         if not_actions and not actions:
             out.append(("HIGH", f"notaction:{sid}",
                         "Allow with NotAction (inverted allow)",
-                        f"Statement {sid or '(no Sid)'} allows everything except {', '.join(not_actions[:5])}"
+                        f"{label} allows everything except {', '.join(not_actions[:5])}"
                         + ("…" if len(not_actions) > 5 else "") + "; this is usually far broader than intended."))
             continue
         svc_wild = [a for a in shown_actions if a.endswith(":*")]
         if svc_wild and res_all:
             out.append(("MEDIUM" if has_cond else "HIGH", f"svcwild:{sid}:{','.join(svc_wild)}",
                         f"Service-wide wildcard: {', '.join(svc_wild[:4])}",
-                        f"Statement {sid or '(no Sid)'} grants all actions for {', '.join(svc_wild[:4])} on every resource."))
+                        f"{label} grants all actions for {', '.join(svc_wild[:4])} on every resource."))
         if any(a == "iam:passrole" or a == "iam:*" for a in actions) and res_all:
             out.append(("HIGH", f"passrole:{sid}", "iam:PassRole on any role",
-                        f"Statement {sid or '(no Sid)'} allows passing ANY role to services; combined with "
+                        f"{label} allows passing ANY role to services; combined with "
                         f"a create/update permission on a compute service this is privilege escalation to any "
                         f"role in the account (including administrators)."))
         esc = sorted(a for a in actions if a in ESCALATION_ACTIONS or
@@ -1248,10 +1547,10 @@ def _risky_signatures(doc: dict | None, is_trust: bool, is_resource_policy: bool
                 sev = "MEDIUM"
             out.append((sev, f"esc:{sid}:{','.join(esc)}",
                         f"Privilege-escalation capable action(s): {', '.join(esc[:4])}",
-                        f"Statement {sid or '(no Sid)'} grants {', '.join(esc[:4])} on every resource."))
+                        f"{label} grants {', '.join(esc[:4])} on every resource."))
         if not_resources is not None and actions and "*" not in actions:
             out.append(("MEDIUM", f"notresource:{sid}", "Allow with NotResource",
-                        f"Statement {sid or '(no Sid)'} allows {', '.join(shown_actions[:4])} on everything except "
+                        f"{label} allows {', '.join(shown_actions[:4])} on everything except "
                         f"the listed resources."))
     return out
 
@@ -1290,16 +1589,20 @@ def rule_iam(ch: Change) -> list[Finding]:
         for doc in before_docs:
             for sev, key, title, detail in _risky_signatures(doc, trust_attr, is_res):
                 before_keys.add(key)
+        doc_sensitive = ch.is_sensitive(attr) or ch.is_sensitive(attr, "before")
         for key, (sev, title, detail) in after_sigs.items():
+            shown = "(details withheld: the policy attribute is marked sensitive)" if doc_sensitive else detail
             if key in before_keys:
+                if sev == "INFO":
+                    continue
                 out.append(Finding("WB-I000", "INFO", "iam", ch.address, ch.type, ch.kind,
                                    f"Pre-existing: {title}",
-                                   f"`{ch.address}` `{attr}` already had this before the change: {detail}",
+                                   f"`{ch.address}` `{attr}` already had this before the change: {shown}",
                                    "Not introduced by this plan, but worth fixing separately.", {}))
                 continue
             fix = _iam_fix(title)
             out.append(Finding("WB-I001", sev, "iam", ch.address, ch.type, ch.kind, title,
-                               f"`{ch.address}` `{attr}`: {detail}", fix, {"attribute": attr}))
+                               f"`{ch.address}` `{attr}`: {shown}", fix, {"attribute": attr}))
 
     # Managed policy attachments
     arns = []
@@ -1354,12 +1657,15 @@ def rule_iam(ch: Change) -> list[Finding]:
                                    f"Grants {role or 'a role'} to allAuthenticatedUsers",
                                    f"`{ch.address}` binds `{role}` to `allAuthenticatedUsers`: any Google account.",
                                    "Bind specific principals or groups instead.", {}))
-        if role and (ch.kind == "create" or role != str(b.get("role") or "")):
+        if role and (ch.kind == "create" or role != str(b.get("role") or "") or members):
             sev = GCP_ADMIN_ROLES.get(role)
             if sev:
+                who = ", ".join(sorted(members)[:3]) if members else "the bound principals"
+                if ch.is_sensitive("members") or ch.is_sensitive("member"):
+                    who = "«sensitive»"
                 out.append(Finding("WB-I005", sev, "iam", ch.address, ch.type, ch.kind,
                                    f"Grants broad role {role}",
-                                   f"`{ch.address}` grants `{role}`" + (f" to {', '.join(sorted(members)[:3])}" if members else "") + ".",
+                                   f"`{ch.address}` grants `{role}` to {who}.",
                                    "Grant the narrowest predefined role that covers the needed permissions, "
                                    "scoped to the resource rather than the project where possible.", {"role": role}))
         if ch.type.endswith("_iam_policy") and ch.kind in ("create", "update"):
@@ -1369,10 +1675,16 @@ def rule_iam(ch: Change) -> list[Finding]:
                                f"on apply, including ones added outside Terraform.",
                                "Prefer `*_iam_member` / `*_iam_binding` unless you intend to own every binding.", {}))
 
-    # Azure role assignments
+    # Azure role assignments (by name or by built-in role definition id)
     if ch.type == "azurerm_role_assignment" and ch.kind in ("create", "update"):
         role = str(a.get("role_definition_name") or "").lower()
+        rid = str(a.get("role_definition_id") or "").lower()
+        for guid, rname in AZURE_ROLE_GUIDS.items():
+            if rid.endswith(guid):
+                role = role or rname
         scope = str(a.get("scope") or "")
+        if ch.is_sensitive("scope"):
+            scope = "«sensitive»"
         sev = AZURE_ADMIN_ROLES.get(role)
         if sev:
             broad_scope = bool(re.match(r"^/subscriptions/[^/]+/?$", scope)) or "/providers/Microsoft.Management/" in scope
@@ -1381,10 +1693,26 @@ def rule_iam(ch: Change) -> list[Finding]:
             elif not broad_scope and sev == "HIGH":
                 sev = "MEDIUM"
             out.append(Finding("WB-I005", sev, "iam", ch.address, ch.type, ch.kind,
-                               f"Assigns {a.get('role_definition_name')} at {'subscription/management-group' if broad_scope else 'resource'} scope",
-                               f"`{ch.address}` assigns `{a.get('role_definition_name')}` on `{_shorten(scope, 80)}`.",
+                               f"Assigns {a.get('role_definition_name') or role.title()} at {'subscription/management-group' if broad_scope else 'resource'} scope",
+                               f"`{ch.address}` assigns `{a.get('role_definition_name') or role.title()}` on `{_shorten(scope, 80)}`.",
                                "Assign the least-privileged built-in role at the narrowest scope; avoid Owner "
                                "and User Access Administrator outside break-glass identities.", {"scope": scope}))
+    # Kubernetes: cluster-admin handed to broad groups
+    if ch.type in ("kubernetes_cluster_role_binding", "kubernetes_cluster_role_binding_v1",
+                   "kubernetes_role_binding", "kubernetes_role_binding_v1") and ch.kind in ("create", "update"):
+        role_ref = _first_block(a.get("role_ref"))
+        subjects = [x for x in _as_list(a.get("subject")) if isinstance(x, dict)]
+        names = [str(x.get("name") or "") for x in subjects]
+        if str(role_ref.get("name") or "") in ("cluster-admin", "admin", "edit") and names:
+            broad = [n for n in names if n.startswith("system:authenticated") or n.startswith("system:unauthenticated")
+                     or n == "system:serviceaccounts"]
+            sev = "CRITICAL" if broad else ("HIGH" if role_ref.get("name") == "cluster-admin" else "MEDIUM")
+            out.append(Finding("WB-I008", sev, "iam", ch.address, ch.type, ch.kind,
+                               f"Binds {role_ref.get('name')} to {', '.join(broad or names[:3])}",
+                               f"`{ch.address}` binds the `{role_ref.get('name')}` role to {', '.join(names[:4])}"
+                               + (" — every authenticated/anonymous identity in the cluster." if broad else "."),
+                               "Bind admin roles to specific groups or service accounts; never to system:authenticated or system:unauthenticated.",
+                               {"subjects": names}))
     return out
 
 
@@ -1438,7 +1766,10 @@ def _iam_fix(title: str) -> str:
 def rule_plan_level(plan: dict, changes: list[Change]) -> list[Finding]:
     out: list[Finding] = []
     managed = [c for c in changes if c.mode == "managed" and c.kind != "no-op"]
-    n_del = sum(1 for c in managed if c.kind == "delete" and not c.deposed)
+    deletes = [c for c in managed if c.kind == "delete" and not c.deposed]
+    n_del = len(deletes)
+    heavy = [c for c in managed if c.kind in ("delete", "replace") and not c.deposed
+             and classify_type(c.type) in ("data", "outage", "default")]
     n_rep = sum(1 for c in managed if c.kind == "replace")
     n_cre = sum(1 for c in managed if c.kind == "create")
     n_upd = sum(1 for c in managed if c.kind == "update")
@@ -1449,30 +1780,32 @@ def rule_plan_level(plan: dict, changes: list[Change]) -> list[Finding]:
                            "Fix the error and re-plan.", {}))
     if plan.get("complete") is False:
         out.append(Finding("WB-P002", "HIGH", "plan", "(plan)", "", "",
-                           "Partial plan (-target / -exclude used)",
-                           "`complete: false`: the plan was built with resource targeting, so dependent "
+                           "Partial plan (-target / -exclude, or deferred changes)",
+                           "`complete: false`: the plan does not cover the whole configuration, so dependent "
                            "resources are not being updated. Applying a partial plan can leave the "
                            "configuration inconsistent, and a later full plan may make surprising changes.",
                            "Use targeting only for recovery; follow up with a full `terraform plan`.", {}))
     if n_del >= 3 and n_cre == 0 and n_upd == 0 and n_rep == 0:
-        out.append(Finding("WB-P003", "CRITICAL", "plan", "(plan)", "", "",
+        serious = any(classify_type(c.type) in ("data", "outage") for c in deletes)
+        out.append(Finding("WB-P003", "CRITICAL" if (serious or n_del >= 10) else "HIGH", "plan", "(plan)", "", "",
                            f"This is a destroy plan: {n_del} resources will be destroyed",
                            "Every change in this plan is a deletion. This is what `terraform destroy`, "
                            "an empty configuration, a wrong workspace, or a missing/empty state file produces.",
                            "Confirm you are in the intended workspace/backend and that destroying everything "
                            "is the goal. If the state file is missing, STOP: applying will try to recreate "
                            "resources that already exist, or destroy what the state says exists.", {}))
-    elif n_del + n_rep >= 10:
+    elif len(heavy) >= 10:
         out.append(Finding("WB-P004", "HIGH", "plan", "(plan)", "", "",
-                           f"Large blast radius: {n_del} destroys and {n_rep} replacements",
+                           f"Large blast radius: {len(heavy)} non-trivial destroys/replacements",
                            "A large number of resources are recreated or removed in one apply.",
                            "Split the change into smaller applies, or apply in a maintenance window with "
                            "a tested rollback.", {}))
-    drift = plan.get("resource_drift") or []
+    drift = plan.get("resource_drift")
+    drift = [d for d in drift if isinstance(d, dict)] if isinstance(drift, list) else []
     if drift:
-        addrs = [d.get("address", "?") for d in drift][:8]
-        vanished = [d.get("address", "?") for d in drift
-                    if (d.get("change") or {}).get("actions") == ["delete"]]
+        addrs = [str(d.get("address", "?")) for d in drift][:8]
+        vanished = [str(d.get("address", "?")) for d in drift
+                    if isinstance(d.get("change"), dict) and d["change"].get("actions") == ["delete"]]
         detail = (f"{len(drift)} resource(s) changed outside Terraform since the last apply: "
                   f"{', '.join(addrs)}{'…' if len(drift) > 8 else ''}.")
         if vanished:
@@ -1480,14 +1813,88 @@ def rule_plan_level(plan: dict, changes: list[Change]) -> list[Finding]:
         out.append(Finding("WB-P005", "INFO", "plan", "(plan)", "", "", "Drift detected", detail,
                            "Review whether the manual changes should be kept (`ignore_changes` / update the "
                            "config) or reverted by this apply.", {"count": len(drift)}))
+    imports = [c.address for c in changes if c.importing]
+    if imports:
+        out.append(Finding("WB-P006", "INFO", "plan", "(plan)", "", "",
+                           f"{len(imports)} resource(s) imported into state",
+                           f"Imported: {', '.join(imports[:6])}{'…' if len(imports) > 6 else ''}. Imports adopt existing "
+                           f"objects; check that no other change in this plan then modifies them unexpectedly.",
+                           "Compare the imported attributes with the configuration after apply.", {"imports": imports}))
     return out
 
 
 # --------------------------------------------------------------------------- #
 # Orchestration                                                                 #
 # --------------------------------------------------------------------------- #
+_LOCAL_ACCOUNT: str | None = None
+_ACCT_IN_ARN = re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:(\d{12}):")
+
+
+def _infer_local_account(changes: list[Change]) -> str | None:
+    """The account that owns this plan is the one that appears most in ARNs across all values."""
+    counts: dict[str, int] = {}
+
+    def walk(v: Any) -> None:
+        if isinstance(v, str):
+            for m in _ACCT_IN_ARN.finditer(v):
+                counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    for c in changes:
+        walk(c.before)
+        walk(c.after)
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda kv: kv[1])[0]
+
+
+RENAME_IGNORE_KEYS = {"id", "arn", "tags_all", "unique_id", "self_link", "etag", "fingerprint",
+                      "creation_date", "created_at", "url", "uri", "hosted_zone_id", "address",
+                      "endpoint", "resource_id", "owner_id", "policy_id", "version", "latest_version"}
+
+
+def _pair_renames(changes: list[Change]) -> None:
+    """Mark deletes that have a same-type create with matching values (a rename without a `moved` block)."""
+    creates = [c for c in changes if c.mode == "managed" and c.kind == "create" and isinstance(c.after, dict)]
+    used: set[str] = set()
+    for d in changes:
+        if d.mode != "managed" or d.kind != "delete" or not isinstance(d.before, dict):
+            continue
+        if d.action_reason not in ("delete_because_no_resource_config", "delete_because_no_module"):
+            continue
+        for c in creates:
+            if c.type != d.type or c.address in used:
+                continue
+            comparable = 0
+            mismatch = False
+            for k, bv in d.before.items():
+                if k in RENAME_IGNORE_KEYS or bv in (None, "", [], {}):
+                    continue
+                if c.is_unknown(k) or k not in c.after or c.after.get(k) in (None,):
+                    continue
+                comparable += 1
+                if c.after.get(k) != bv:
+                    mismatch = True
+                    break
+            if not mismatch and comparable >= 1:
+                d.rename_to = c.address
+                used.add(c.address)
+                break
+
+
 def analyze(plan: dict) -> dict:
-    changes = [Change(rc) for rc in (plan.get("resource_changes") or []) if isinstance(rc, dict)]
+    raw_changes = plan.get("resource_changes")
+    if not isinstance(raw_changes, list):
+        raw_changes = []
+    changes = [Change(rc) for rc in raw_changes if isinstance(rc, dict)]
+    global _LOCAL_ACCOUNT
+    _LOCAL_ACCOUNT = _infer_local_account(changes)
+    _pair_renames(changes)
     findings: list[Finding] = []
     for ch in changes:
         for rule in (rule_destructive, rule_safety, rule_network, rule_iam):
@@ -1529,12 +1936,14 @@ def _summary(plan: dict, changes: list[Change]) -> dict:
         "applyable": plan.get("applyable"), "complete": plan.get("complete"),
         "errored": plan.get("errored"),
         "outputs_changing": sum(1 for v in (plan.get("output_changes") or {}).values()
-                                if isinstance(v, dict) and v.get("actions") not in (["no-op"], None)),
+                                if isinstance(v, dict) and v.get("actions") not in (["no-op"], None))
+        if isinstance(plan.get("output_changes"), dict) else 0,
+        "imports": sum(1 for c in changes if c.importing),
     }
 
 
 def _unflagged(changes: list[Change], findings: list[Finding]) -> list[dict]:
-    flagged = {f.address for f in findings if f.severity in ("CRITICAL", "HIGH", "MEDIUM")}
+    flagged = {f.address for f in findings}
     out = []
     for c in changes:
         if c.mode != "managed" or c.kind == "no-op" or c.address in flagged:
@@ -1550,7 +1959,7 @@ VERDICT_TEXT = {
     "BLOCK": "do not apply until the critical findings are resolved or explicitly approved",
     "WARN": "apply only after the high-severity findings are understood and accepted",
     "REVIEW": "read the medium-severity findings before applying",
-    "OK": "no destructive, exposing, or privilege-widening changes found",
+    "OK": "no critical, high, or medium findings",
 }
 
 
@@ -1576,7 +1985,10 @@ def render_markdown(report: dict, source: str, max_findings: int) -> str:
         plan_line += " " + " · ".join(meta) + "."
     lines.append(plan_line)
     lines.append(f"**Source:** {source}")
-    lines.append(f"**Verdict:** {report['verdict']} — {VERDICT_TEXT[report['verdict']]}. "
+    vtext = VERDICT_TEXT[report["verdict"]]
+    if report["verdict"] == "OK" and (c["LOW"] or c["INFO"]):
+        vtext += f"; {c['LOW']} low and {c['INFO']} info finding(s) worth a glance"
+    lines.append(f"**Verdict:** {report['verdict']} — {vtext}. "
                  f"Findings: {c['CRITICAL']} critical, {c['HIGH']} high, {c['MEDIUM']} medium, "
                  f"{c['LOW']} low, {c['INFO']} info.")
     lines.append("")
@@ -1654,8 +2066,9 @@ def write_marker(marker_dir: str, plan_file: str | None, json_sha: str, report: 
     path = os.path.join(marker_dir, key + ".json")
     if report["verdict"] == "BLOCK":
         marker["status"] = "blocked"
-        status = ("verdict is BLOCK, so the apply gate will still deny `apply`; run "
-                  "`/whatbreaks:approve <plan-file>` after the user explicitly accepts the risk")
+        status = ("verdict is BLOCK, so the apply gate will still deny `apply`; if the user reads the "
+                  "critical findings and still wants to proceed, they must run `/whatbreaks:approve <plan-file>` "
+                  "themselves (do not run it for them)")
     else:
         marker["status"] = "reviewed"
         status = "reviewed; the apply gate will allow `terraform apply` of this exact plan file"
@@ -1711,8 +2124,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = analyze(plan)
     json_sha = hashlib.sha256(raw).hexdigest()
-    if args.plan_file and not os.path.exists(args.plan_file):
-        print(f"whatbreaks: --plan-file {args.plan_file} does not exist; no marker written", file=sys.stderr)
+    if args.plan_file and not os.path.isfile(args.plan_file):
+        print(f"whatbreaks: --plan-file {args.plan_file} is not a file; no marker written", file=sys.stderr)
     elif args.marker_dir:
         report["marker"] = write_marker(args.marker_dir, args.plan_file, json_sha, report)
 

@@ -160,6 +160,7 @@
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,
@@ -187,6 +188,7 @@
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,
@@ -214,6 +216,7 @@
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,

@@ -19,6 +19,27 @@ ACCT = "111111111111"
 TF_VERSION = "1.9.8"
 
 
+def unknown_shape(after, extra=None, top=True):
+    """Mimic Terraform's after_unknown: known values keep their collection *structure* (lists of
+    blocks become [{}], lists of scalars become [false, ...]); only truly unknown leaves are true."""
+    if not isinstance(after, dict):
+        return {}
+    out = {}
+    for k, v in after.items():
+        if isinstance(v, list):
+            if v and all(isinstance(x, dict) for x in v):
+                out[k] = [unknown_shape(x, top=False) for x in v]
+            else:
+                out[k] = [False for _ in v]
+        elif isinstance(v, dict):
+            out[k] = {}
+    if top and "id" not in after:
+        out["id"] = True
+    for k, v in (extra or {}).items():
+        out[k] = v
+    return out
+
+
 def rc(address, rtype, actions, before=None, after=None, *, reason=None, replace_paths=None,
        after_unknown=None, sensitive=(), module=None, index=None, provider=None, mode="managed"):
     if provider is None:
@@ -42,7 +63,7 @@ def rc(address, rtype, actions, before=None, after=None, *, reason=None, replace
             "actions": actions,
             "before": before,
             "after": after,
-            "after_unknown": after_unknown if after_unknown is not None else ({"id": True} if after is not None and "id" not in (after or {}) else {}),
+            "after_unknown": (unknown_shape(after, after_unknown) if after is not None else {}),
             "before_sensitive": {k: True for k in sensitive if before} if before else False,
             "after_sensitive": {k: True for k in sensitive if after} if after else False,
         },
@@ -292,6 +313,115 @@ FIXTURES["heuristics"] = plan([
     rc("foo_widget.thing", "foo_widget", ["delete"], {"id": "w1"}, None),
     rc("null_resource.provisioner", "null_resource", ["delete", "create"], {"id": "1", "triggers": {"v": "1"}},
        {"triggers": {"v": "2"}}, reason="replace_because_cannot_update", replace_paths=["triggers"]),
+])
+
+# 16. Role created with an inline admin policy (realistic after_unknown placeholders)
+_inline_admin = json.dumps({"Version": "2012-10-17", "Statement": [{"Sid": "All", "Effect": "Allow", "Action": "*", "Resource": "*"}]})
+FIXTURES["inline-admin-role"] = plan([
+    rc("aws_iam_role.deploy", "aws_iam_role", ["create"], None,
+       {"name": "deploy", "assume_role_policy": _trust_ok, "inline_policy": [{"name": "all", "policy": _inline_admin}],
+        "managed_policy_arns": [], "tags": {"team": "platform"}},
+       after_unknown={"arn": True, "unique_id": True, "create_date": True}),
+    rc("aws_lambda_function.deploy", "aws_lambda_function", ["create"], None,
+       {"function_name": "deploy", "runtime": "python3.12", "role": f"arn:aws:iam::{ACCT}:role/deploy"}),
+])
+
+# 17. managed_policy_arns gains AdministratorAccess on update (after_unknown [false, false])
+FIXTURES["managed-arns-admin"] = plan([
+    rc("aws_iam_role.ci", "aws_iam_role", ["update"],
+       {"id": "ci", "name": "ci", "arn": f"arn:aws:iam::{ACCT}:role/ci", "assume_role_policy": _trust_ok,
+        "managed_policy_arns": ["arn:aws:iam::aws:policy/ReadOnlyAccess"]},
+       {"id": "ci", "name": "ci", "arn": f"arn:aws:iam::{ACCT}:role/ci", "assume_role_policy": _trust_ok,
+        "managed_policy_arns": ["arn:aws:iam::aws:policy/ReadOnlyAccess", "arn:aws:iam::aws:policy/AdministratorAccess"]}),
+])
+
+# 18. EKS API endpoint opened to the internet (nested vpc_config)
+_eks = lambda pub, cidrs: {"id": "prod", "name": "prod", "version": "1.31", "role_arn": f"arn:aws:iam::{ACCT}:role/eks",
+    "vpc_config": [{"subnet_ids": ["subnet-a", "subnet-b"], "endpoint_private_access": True,
+                    "endpoint_public_access": pub, "public_access_cidrs": cidrs, "cluster_security_group_id": "sg-0eks", "vpc_id": "vpc-0abc"}]}
+FIXTURES["eks-endpoint-public"] = plan([
+    rc("aws_eks_cluster.prod", "aws_eks_cluster", ["update"], _eks(False, []), _eks(True, ["0.0.0.0/0"])),
+])
+
+# 19. GuardDuty detector disabled
+FIXTURES["guardduty-disabled"] = plan([
+    rc("aws_guardduty_detector.main", "aws_guardduty_detector", ["update"],
+       {"id": "det-1", "enable": True, "finding_publishing_frequency": "SIX_HOURS"},
+       {"id": "det-1", "enable": False, "finding_publishing_frequency": "SIX_HOURS"}),
+])
+
+# 20. Routine ECS deploy: task definition revision + service update. Must NOT warn.
+_td = lambda img: {"family": "api", "container_definitions": json.dumps([{"name": "api", "image": img, "essential": True}]),
+                   "cpu": "256", "memory": "512", "network_mode": "awsvpc", "requires_compatibilities": ["FARGATE"],
+                   "execution_role_arn": f"arn:aws:iam::{ACCT}:role/ecs-exec"}
+FIXTURES["ecs-deploy-routine"] = plan([
+    rc("aws_ecs_task_definition.api", "aws_ecs_task_definition", ["delete", "create"],
+       dict(_td("registry.example.com/api:1.4.0"), id="api:41", arn=f"arn:aws:ecs:us-east-1:{ACCT}:task-definition/api:41", revision=41),
+       _td("registry.example.com/api:1.5.0"), reason="replace_because_cannot_update", replace_paths=["container_definitions"],
+       after_unknown={"arn": True, "revision": True}),
+    rc("aws_ecs_service.api", "aws_ecs_service", ["update"],
+       {"id": "api", "name": "api", "desired_count": 3, "task_definition": f"arn:aws:ecs:us-east-1:{ACCT}:task-definition/api:41"},
+       {"id": "api", "name": "api", "desired_count": 3, "task_definition": None}, after_unknown={"task_definition": True}),
+    rc("aws_secretsmanager_secret_version.api", "aws_secretsmanager_secret_version", ["delete", "create"],
+       {"id": "api|v1", "secret_id": f"arn:aws:secretsmanager:us-east-1:{ACCT}:secret:api", "secret_string": "REDACTED"},
+       {"secret_id": f"arn:aws:secretsmanager:us-east-1:{ACCT}:secret:api", "secret_string": "REDACTED"},
+       reason="replace_because_cannot_update", replace_paths=["secret_string"], sensitive=("secret_string",)),
+])
+
+# 21. SNS -> SQS wiring: Principal * scoped by aws:SourceArn (the standard pattern). Must NOT warn.
+_sqs_pol = json.dumps({"Version": "2012-10-17", "Statement": [{"Sid": "AllowSNS", "Effect": "Allow", "Principal": "*",
+    "Action": "sqs:SendMessage", "Resource": f"arn:aws:sqs:us-east-1:{ACCT}:orders",
+    "Condition": {"ArnEquals": {"aws:SourceArn": f"arn:aws:sns:us-east-1:{ACCT}:order-events"}}}]})
+FIXTURES["sns-sqs-scoped"] = plan([
+    rc("aws_sqs_queue_policy.orders", "aws_sqs_queue_policy", ["create"], None,
+       {"queue_url": f"https://sqs.us-east-1.amazonaws.com/{ACCT}/orders", "policy": _sqs_pol}),
+    rc("aws_sns_topic_subscription.orders", "aws_sns_topic_subscription", ["create"], None,
+       {"topic_arn": f"arn:aws:sns:us-east-1:{ACCT}:order-events", "protocol": "sqs", "endpoint": f"arn:aws:sqs:us-east-1:{ACCT}:orders"}),
+])
+
+# 22. New KMS key with the canonical default key policy (account root, kms:*). Must NOT warn.
+_kms_pol = json.dumps({"Version": "2012-10-17", "Id": "key-default-1", "Statement": [{"Sid": "Enable IAM User Permissions",
+    "Effect": "Allow", "Principal": {"AWS": f"arn:aws:iam::{ACCT}:root"}, "Action": "kms:*", "Resource": "*"}]})
+FIXTURES["kms-default-policy"] = plan([
+    rc("aws_kms_key.data", "aws_kms_key", ["create"], None,
+       {"description": "data at rest", "deletion_window_in_days": 30, "enable_key_rotation": True, "is_enabled": True, "policy": _kms_pol},
+       after_unknown={"arn": True, "key_id": True}),
+    rc("aws_kms_alias.data", "aws_kms_alias", ["create"], None, {"name": "alias/data", "target_key_id": None}, after_unknown={"target_key_id": True}),
+    rc("aws_iam_role.reader", "aws_iam_role", ["update"],
+       {"id": "reader", "name": "reader", "arn": f"arn:aws:iam::{ACCT}:role/reader", "assume_role_policy": _trust_ok, "tags": {}},
+       {"id": "reader", "name": "reader", "arn": f"arn:aws:iam::{ACCT}:role/reader", "assume_role_policy": _trust_ok, "tags": {"owner": "data"}}),
+])
+
+# 23. GCP: a member is added to an existing roles/owner binding (role unchanged)
+FIXTURES["gcp-binding-growth"] = plan([
+    rc("google_project_iam_binding.owners", "google_project_iam_binding", ["update"],
+       {"id": "example-prod/roles/owner", "project": "example-prod", "role": "roles/owner", "members": ["group:platform-admins@example.com"]},
+       {"id": "example-prod/roles/owner", "project": "example-prod", "role": "roles/owner", "members": ["group:platform-admins@example.com", "user:eve@example.com"]}),
+])
+
+# 24. Kubernetes: cluster-admin bound to every authenticated user
+FIXTURES["k8s-cluster-admin"] = plan([
+    rc("kubernetes_cluster_role_binding.everyone", "kubernetes_cluster_role_binding", ["create"], None,
+       {"metadata": [{"name": "everyone-admin"}], "role_ref": [{"api_group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "cluster-admin"}],
+        "subject": [{"api_group": "rbac.authorization.k8s.io", "kind": "Group", "name": "system:authenticated"}]}),
+])
+
+# 25. GitHub repository goes public
+FIXTURES["github-public"] = plan([
+    rc("github_repository.platform", "github_repository", ["update"],
+       {"id": "platform", "name": "platform", "visibility": "private", "private": True},
+       {"id": "platform", "name": "platform", "visibility": "public", "private": False},
+       provider="registry.terraform.io/integrations/github"),
+])
+
+# 26. Sub-resource deletes: settings attached to a parent, never data loss
+FIXTURES["sub-resource-deletes"] = plan([
+    rc("aws_route_table_association.private_a", "aws_route_table_association", ["delete"],
+       {"id": "rtbassoc-0abc", "route_table_id": "rtb-0abc", "subnet_id": "subnet-a"}, None, reason="delete_because_no_resource_config"),
+    rc("aws_s3_bucket_policy.logs", "aws_s3_bucket_policy", ["delete"],
+       {"id": "example-logs", "bucket": "example-logs", "policy": "{}"}, None, reason="delete_because_no_resource_config"),
+    rc("aws_iam_role_policy_attachment.ci_readonly", "aws_iam_role_policy_attachment", ["delete"],
+       {"id": "ci-2026", "role": "ci", "policy_arn": "arn:aws:iam::aws:policy/ReadOnlyAccess"}, None, reason="delete_because_no_resource_config"),
 ])
 
 

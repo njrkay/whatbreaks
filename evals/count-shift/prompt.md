@@ -174,6 +174,7 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,
@@ -201,6 +202,7 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,
@@ -228,6 +230,7 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "tags": {},
           "id": true
         },
         "before_sensitive": false,

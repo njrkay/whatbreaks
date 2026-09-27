@@ -19,7 +19,7 @@ Top-level keys that matter:
 | `resource_changes[].deposed` | Set when the entry cleans up an object left behind by an earlier create-before-destroy. Low risk. |
 | `resource_drift[]` | Resources that changed outside Terraform since the last apply. Same shape as `resource_changes`. |
 | `output_changes` | Outputs that change; sensitive ones are flagged. |
-| `complete` | `false` means `-target`/`-exclude` was used. The plan is partial. |
+| `complete` | `false` means the plan does not cover the whole configuration: `-target`/`-exclude` was used, or some changes were deferred. |
 | `errored` | `true` means planning failed; nothing should be applied. |
 | `applyable` | `false` when there is nothing to apply or the plan cannot be applied. |
 
@@ -46,7 +46,7 @@ Top-level keys that matter:
 | `replace_by_triggers` | `replace_triggered_by` fired | check the trigger |
 | `delete_because_no_resource_config` | Block removed from config, **or renamed/moved without a `moved` block** | `moved` block if renamed; `removed` block to keep it running unmanaged |
 | `delete_because_wrong_repetition` | Switched between `count`, `for_each`, and single instance | `moved` blocks per index/key |
-| `delete_because_count_index` | `count` shrank or the list was reordered | `moved` blocks; prefer `for_each` with stable keys |
+| `delete_because_count_index` | `count` shrank (the index is >= the new count) | `moved` blocks; prefer `for_each` with stable keys |
 | `delete_because_each_key` | A `for_each` key was removed or renamed | `moved` block from old key to new |
 | `delete_because_no_module` | The module call was removed | `moved` block into the new location, or confirm the removal |
 
@@ -65,13 +65,22 @@ Symbols at the start of each resource block:
 | `-` | destroy |
 | `-/+` | **replace** (destroy then create) |
 | `+/-` | **replace** (create then destroy) |
+| `.` | forget: removed from state, not destroyed (`removed` block) |
+| `./+`, `+/.` | forget then create / create then forget |
 | `<=` | data source read |
 
-Phrases to search for, in priority order:
+Phrases to search for, in priority order (these are the exact strings Terraform prints):
 
-1. `must be replaced` and `forces replacement` — the attribute on the `# forces replacement` line is the cause.
-2. `will be destroyed` — a plain delete. Look one line up for `# (because ...)`: `no longer in configuration`, `index ... out of range`, `key ... not in for_each` — these are rename/index-shift signals.
-3. The summary line `Plan: X to add, Y to change, Z to destroy.` — if `to add` and `to change` are 0 and `to destroy` is everything, this is a destroy plan.
+1. Replacements: `must be replaced` (the attribute carrying the trailing `# forces replacement`
+   comment is the cause), `is tainted, so must be replaced`, `will be replaced, as requested`
+   (`-replace`), `will be replaced due to changes in replace_triggered_by`.
+2. `will be destroyed` — a plain delete. The **next** line may say why: `# (because <type>.<name>
+   is not in configuration)` (removed, or renamed without a `moved` block), `# (because index [N]
+   is out of range for count)`, `# (because key ["k"] is not in for_each map)`, `# (because
+   resource does not use count)` / `does not use for_each` / `uses count or for_each`, `# (because
+   module.x is not in configuration)`.
+3. The summary line `Plan: X to add, Y to change, Z to destroy.` — if `to add` and `to change` are
+   0 and `to destroy` is everything, this is a destroy plan.
 4. `(known after apply)` on an attribute that forces replacement.
 5. `(sensitive value)` — never ask for or repeat the real value.
 6. `Note: Objects have changed outside of Terraform` — the drift section.

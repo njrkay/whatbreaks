@@ -108,6 +108,13 @@
           }
         },
         "after_unknown": {
+          "attribute": [
+            {}
+          ],
+          "point_in_time_recovery": [
+            {}
+          ],
+          "tags": {},
           "id": true,
           "arn": true
         },

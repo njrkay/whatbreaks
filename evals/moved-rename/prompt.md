@@ -122,6 +122,13 @@ This is the output of `terraform show -json tfplan`:
           }
         },
         "after_unknown": {
+          "attribute": [
+            {}
+          ],
+          "point_in_time_recovery": [
+            {}
+          ],
+          "tags": {},
           "id": true,
           "arn": true
         },

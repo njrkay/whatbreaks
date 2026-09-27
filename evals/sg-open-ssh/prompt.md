@@ -192,7 +192,37 @@ This is the output of `terraform show -json tfplan`:
           ],
           "tags": {}
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "ingress": [
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            },
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            }
+          ],
+          "egress": [
+            {
+              "cidr_blocks": [
+                false
+              ],
+              "ipv6_cidr_blocks": [],
+              "prefix_list_ids": [],
+              "security_groups": []
+            }
+          ],
+          "tags": {}
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }
@@ -223,7 +253,9 @@ This is the output of `terraform show -json tfplan`:
             "Name": "web"
           }
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "tags": {}
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

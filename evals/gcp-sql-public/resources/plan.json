@@ -100,6 +100,17 @@
           "deny": []
         },
         "after_unknown": {
+          "source_ranges": [
+            false
+          ],
+          "allow": [
+            {
+              "ports": [
+                false
+              ]
+            }
+          ],
+          "deny": [],
           "id": true
         },
         "before_sensitive": false,
@@ -159,7 +170,20 @@
             }
           ]
         },
-        "after_unknown": {},
+        "after_unknown": {
+          "settings": [
+            {
+              "ip_configuration": [
+                {
+                  "authorized_networks": [
+                    {},
+                    {}
+                  ]
+                }
+              ]
+            }
+          ]
+        },
         "before_sensitive": {},
         "after_sensitive": {}
       }

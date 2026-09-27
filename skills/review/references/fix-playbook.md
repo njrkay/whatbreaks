@@ -67,13 +67,16 @@ Options, in order of preference:
    ```
 3. If the change is required on a data-tier resource: snapshot, then either restore into the new
    resource or do a blue-green cut-over. For AWS RDS use `snapshot_identifier` on the new instance.
+   Note: a restore keeps the snapshot's master username, so a different admin login is better
+   created in SQL than by replacing the instance.
 4. Shorten the outage on outage-tier resources:
    ```hcl
    lifecycle {
      create_before_destroy = true
    }
    ```
-   Check for name collisions first: many resources cannot have two instances with the same name.
+   Check for name collisions first: many resources (an RDS `identifier`, a bucket name, a role
+   name) cannot exist twice, and the create will fail unless the name is changed or generated.
 
 ### Tainted resource (`replace_because_tainted`)
 
@@ -105,8 +108,8 @@ directory was planned. Never "fix" a missing state by applying; recover the stat
 # RDS / Aurora
 deletion_protection       = true
 skip_final_snapshot       = false
-final_snapshot_identifier = "db-prod-final-${formatdate("YYYYMMDD", timestamp())}"  # or a fixed name
-backup_retention_period   = 7   # at or above your RPO
+final_snapshot_identifier = "db-prod-final"   # a fixed name; rename/delete the old snapshot before a second destroy
+backup_retention_period   = 7   # at or above the point-in-time restore window you need
 
 # DynamoDB
 deletion_protection_enabled = true
