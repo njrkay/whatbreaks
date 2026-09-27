@@ -20,7 +20,7 @@ run_hook() {
   local rc
   out=$(printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":%s,"tool_input":{"command":%s}}' \
         "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cwd")" \
-        "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$cmd")" | bash "$HOOK" 2>/dev/null); rc=$?
+        "$(printf '%s' "$cmd" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')" | bash "$HOOK" 2>/dev/null); rc=$?
   if [ -n "$out" ]; then
     if ! printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["hookSpecificOutput"]["permissionDecision"]=="deny"' 2>/dev/null; then
       echo "invalid-json:$out"; return
@@ -201,6 +201,31 @@ if [ "$rc" -eq 0 ] && [ -z "$out" ]; then n_pass=$((n_pass+1)); echo "PASS  allo
 out=$(printf '{"cwd":"%s","tool_input":{"command":"terraform apply ok.tfplan"}}' "$TMP/infra" | env -u CLAUDE_PLUGIN_DATA bash "$HOOK" 2>/dev/null); rc=$?
 if [ "$rc" -eq 2 ]; then n_pass=$((n_pass+1)); echo "PASS  deny   CLAUDE_PLUGIN_DATA unset fails closed"; else n_fail=$((n_fail+1)); echo "FAIL  CLAUDE_PLUGIN_DATA unset: rc=$rc"; fi
 
+# ===== fourth round: variable-named binaries, quoting handled by the built-in tokenizer, size guards
+expect deny 'TF=terraform; $TF apply tfplan' "$TMP/infra" "binary named through a variable"
+expect deny 'export TF=terraform && sudo "$TF" destroy' "$TMP/infra" "quoted variable binary behind sudo"
+expect deny 'TF=terraform; $TF -chdir=envs/prod apply tfplan' "$TMP/infra" "variable binary with a global flag"
+expect allow 'kubectl apply -f x.yaml && terraform validate' "$TMP/infra" "kubectl apply beside terraform validate"
+expect allow 'sudo -u deploy kubectl apply -f x.yaml && terraform plan' "$TMP/infra" "variable elsewhere, kubectl apply named plainly"
+expect allow "terraform apply 'ok.tfplan'" "$TMP/infra" "single-quoted reviewed plan"
+expect allow 'terraform apply ok\.tfplan' "$TMP/infra" "backslash-escaped reviewed plan"
+expect allow 'terraform apply "ok"".tfplan"' "$TMP/infra" "adjacent quoted pieces"
+expect allow $'terraform apply $\'ok.tfplan\'' "$TMP/infra" "ANSI-C quoted reviewed plan"
+expect deny 'terraform apply "tfplan' "$TMP/infra" "unterminated quote still gated"
+expect deny "terraform apply tfplan '" "$TMP/infra" "trailing unterminated quote still gated"
+expect deny 'terraform ap""ply tfplan' "$TMP/infra" "subcommand split by empty quotes"
+expect deny 'nix run nixpkgs#terraform -- apply tfplan' "$TMP/infra" "flake attribute naming the binary"
+expect deny 'nix shell nixpkgs#opentofu -c tofu apply tfplan' "$TMP/infra" "nix shell then tofu apply"
+# size guards: a command the hook could not finish parsing in time must deny, not time out (a timed-out hook allows)
+expect deny "$(yes 'true;' | head -n 400 | tr -d '\n') terraform \$(echo ap)ply tfplan" "$TMP/infra" "hundreds of parts, computed subcommand"
+expect deny "echo $(yes '"a"' | head -n 2100 | tr '\n' ' ')&& terraform \$(echo ap)ply tfplan" "$TMP/infra" "thousands of quoted words, computed subcommand"
+expect deny "$(yes 'true' | head -n 2100)
+terraform \$(echo ap)ply tfplan" "$TMP/infra" "thousands of lines, computed subcommand"
+expect deny "echo $(head -c 140000 /dev/zero | tr '\0' a) && terraform \$(echo ap)ply tfplan" "$TMP/infra" "over the byte cap, computed subcommand"
+expect allow "echo $(head -c 120000 /dev/zero | tr '\0' a) && terraform apply ok.tfplan" "$TMP/infra" "long but simple line before a reviewed apply"
+expect allow "$(printf "cat > x.tf <<'EOF'\n"; yes 'resource "aws_instance" "x" { ami = "abc" ; instance_type = "t3.micro" }' | head -n 1500; printf 'EOF\nterraform fmt')" "$TMP/infra" "large heredoc body then fmt"
+expect allow "$(yes 'true &&' | head -n 100 | tr '\n' ' ') terraform apply ok.tfplan" "$TMP/infra" "a hundred harmless parts then reviewed apply"
+
 # --- modifying the plan file invalidates the review
 printf 'fake-binary-plan-ok-modified' > "$TMP/infra/ok.tfplan"
 expect deny 'terraform apply ok.tfplan' "$TMP/infra" "plan file changed after review"
@@ -241,13 +266,31 @@ if printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); ass
   n_pass=$((n_pass+1)); echo "PASS  deny output is valid JSON"
 else n_fail=$((n_fail+1)); echo "FAIL  deny output is not valid JSON: $out"; fi
 
-# ===== the sed-only fallback (no jq, no python3) must still deny and still allow
+# ===== without jq the hook parses its JSON input and the marker files itself: same decisions
 FB=$(mktemp -d)
 for b in bash sh sed tr awk cat head shasum sha256sum pwd printf mktemp; do p=$(command -v "$b" 2>/dev/null) && ln -s "$p" "$FB/$b"; done
-out=$(printf '{"cwd":"%s","tool_input":{"command":"echo \\"x\\"; terraform apply -auto-approve"}}' "$TMP" | PATH="$FB" bash "$HOOK" 2>/dev/null); rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q '"deny"'; then n_pass=$((n_pass+1)); echo "PASS  deny   sed-only fallback denies auto-approve"; else n_fail=$((n_fail+1)); echo "FAIL  sed-only fallback: rc=$rc out=$out"; fi
-out=$(printf '{"cwd":"%s","tool_input":{"command":"ls -la"}}' "$TMP" | PATH="$FB" bash "$HOOK" 2>/dev/null); rc=$?
-if [ "$rc" -eq 0 ] && [ -z "$out" ]; then n_pass=$((n_pass+1)); echo "PASS  allow  sed-only fallback allows unrelated command"; else n_fail=$((n_fail+1)); echo "FAIL  sed-only fallback allow: rc=$rc out=$out"; fi
+nojq() {
+  # $1 = expected, $2 = JSON-escaped command, $3 = cwd, $4 = label
+  local out rc got
+  out=$(printf '{"cwd":"%s","tool_input":{"command":"%s"},"tool_name":"Bash"}' "$3" "$2" | PATH="$FB" bash "$HOOK" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q '"deny"'; then got=deny; elif [ "$rc" -eq 0 ] && [ -z "$out" ]; then got=allow; else got="rc=$rc out=$out"; fi
+  if [ "$got" = "$1" ]; then n_pass=$((n_pass+1)); printf 'PASS  %-6s no-jq: %s\n' "$1" "$4"; else n_fail=$((n_fail+1)); printf 'FAIL  want %s got %s  no-jq: %s\n' "$1" "$got" "$4"; fi
+}
+cp "$ROOT/evals/clean-plan/resources/plan.json" "$TMP/infra/ok2.tfplan"
+python3 "$ANALYZER" "$TMP/infra/ok2.tfplan" --plan-file "$TMP/infra/ok2.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
+nojq deny  'echo \"x\"; terraform apply -auto-approve' "$TMP" "auto-approve with escaped quotes in the JSON"
+nojq allow 'ls -la' "$TMP" "unrelated command"
+nojq allow 'terraform apply ok2.tfplan' "$TMP/infra" "reviewed plan read from the marker"
+nojq deny  'terraform apply tfplan' "$TMP/infra" "unreviewed plan"
+nojq allow 'cat > README.md <<EOF\nterraform apply -auto-approve\nEOF\nterraform apply ok2.tfplan' "$TMP/infra" "newline escapes and a heredoc body"
+python3 "$ANALYZER" "$ROOT/evals/destroy-plan/resources/plan.json" --plan-file "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" >/dev/null
+nojq deny  'terraform apply block.tfplan' "$TMP/infra" "BLOCK verdict read from the marker"
+python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --reason "test" >/dev/null
+nojq allow 'terraform apply block.tfplan' "$TMP/infra" "approval read from the marker"
+python3 "$APPROVE" "$TMP/infra/block.tfplan" --marker-dir "$CLAUDE_PLUGIN_DATA/reviews" --revoke >/dev/null
+nojq deny  'terraform apply\ttfplan' "$TMP/infra" "tab escape between words"
+nojq deny  'terraform apply we\"ird.tfplan' "$TMP/infra" "escaped quote inside the command"
+nojq deny  'terraform apply back\\\\slash.tfplan' "$TMP/infra" "escaped backslash inside the command"
 rm -rf "$FB"
 
 echo

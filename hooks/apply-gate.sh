@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # whatbreaks apply gate — PreToolUse hook for the Bash tool.
 #
 # Denies `terraform|tofu|terragrunt apply` and `destroy` unless the exact plan file being
@@ -16,16 +16,23 @@
 #   * Never exit 0 from inside the per-command loop: a reviewed apply followed by an
 #     unreviewed one in the same line must still be denied.
 #   * A terraform binary is looked for anywhere in a simple command (wrappers, shells,
-#     docker images, ssh strings), not only in the first position; the only commands
-#     exempt from that scan are ones that merely print or search text.
+#     container images, remote-shell strings), not only in the first position; the only
+#     commands exempt from that scan are ones that merely print or search text.
 #   * The hash is trusted only when nothing earlier on the same line could have rewritten
 #     the plan file: earlier commands must be known-harmless and must not mention the file.
 #
 # Disable with the plugin's `apply_gate` option (userConfig) — never by editing this file.
-# Compatible with bash 3.2 (macOS). Uses jq or python3 for JSON when present and a
-# BSD-sed-safe fallback otherwise.
+# Compatible with bash 3.2 (macOS). Plain bash: JSON fields are read with jq when it is
+# installed and with the small parser below otherwise; shell words are split by the
+# tokenizer below. No other interpreter or file is run.
 
 set -u
+LC_ALL=C   # byte-based string operations keep the tokenizer's cost linear on long commands
+TAB=$'\t'
+WORD_CLASS='["'\''\\ '"$TAB"']'          # where a shell word may end or quoting starts
+DQ_CLASS='["\\]'                          # inside "...": the closing quote or an escape
+SQ_CLASS="['\\\\]"                        # inside $'...': the closing quote or an escape
+STEP_CLASS='[^"'\''\\ '"$TAB"';&|()`]'   # every character that costs the parsing below a step
 
 # ---------------------------------------------------------------- output helpers
 deny() {
@@ -40,24 +47,43 @@ deny() {
 }
 allow() { exit 0; }
 
+json_scalar() {
+  # $1 = JSON text, $2 = key. Prints the value of the first `"key": value` pair: a string
+  # with its escapes decoded, or a bare scalar (true, false, null, a number). Prints
+  # nothing when the key is absent or its value is an object or array. An escaped
+  # `\"key\"` inside a string value never matches, because the quote after the name is
+  # preceded by a backslash there. Every step is one pass over the text, so the cost is
+  # linear in its length. \001 and \002 stand in for escapes while the closing quote is
+  # found; JSON cannot contain those bytes unescaped. (Patterns live in variables: there a
+  # doubled backslash matches one literal backslash.)
+  local s="$1" key="\"$2\"" val
+  local bs2='\\\\' bsq='\\"' bsn='\\n' bst='\\t' bsr='\\r' bsb='\\b' bsf='\\f' bsl='\\/'
+  case "$s" in *"$key"*) ;; *) return 0 ;; esac
+  s=${s#*"$key"}
+  s=${s#"${s%%[![:space:]]*}"}
+  [ "${s:0:1}" = ":" ] || return 0
+  s=${s#:}; s=${s#"${s%%[![:space:]]*}"}
+  if [ "${s:0:1}" != '"' ]; then
+    printf '%s' "${s%%[!A-Za-z0-9_.+-]*}"
+    return 0
+  fi
+  s=${s#\"}
+  s=${s//$bs2/$'\001'}
+  s=${s//$bsq/$'\002'}
+  val=${s%%\"*}
+  val=${val//$'\002'/\"}
+  val=${val//$bsn/$'\n'}; val=${val//$bst/$'\t'}; val=${val//$bsr/}
+  val=${val//$bsb/ }; val=${val//$bsf/ }; val=${val//$bsl/\/}
+  val=${val//$'\001'/\\}
+  printf '%s' "$val"
+}
+
 json_field() {
-  # $1 = jq path, $2 = python expression on obj, $3 = key name for the sed fallback
+  # $1 = jq path, $2 = key name for the built-in parser -> the field of the hook input
   if command -v jq >/dev/null 2>&1; then
     printf '%s' "$INPUT" | jq -r "$1 // empty" 2>/dev/null
-  elif py_ok; then
-    printf '%s' "$INPUT" | python3 -c 'import json,sys
-try:
-    o=json.load(sys.stdin)
-    v='"$2"'
-    sys.stdout.write("" if v is None else str(v))
-except Exception:
-    pass' 2>/dev/null
   else
-    # BSD-safe BRE: protect escaped backslashes and quotes, cut the value, restore.
-    printf '%s' "$INPUT" | tr '\n' ' ' \
-      | sed -e 's/\\\\/@BS@/g' -e 's/\\"/@DQ@/g' \
-      | sed -n 's/.*"'"$3"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-      | sed -e 's/@DQ@/"/g' -e 's/\\n/;/g' -e 's/\\t/ /g' -e 's/\\r//g' -e 's/@BS@/\\/g'
+    json_scalar "$INPUT" "$2"
   fi
 }
 
@@ -70,31 +96,79 @@ sha256_of() {
 
 marker_field() {
   # $1 = marker file, $2 = key -> prints the value lowercased, or nothing
+  local text
   if command -v jq >/dev/null 2>&1; then
     jq -r ".$2 // empty" "$1" 2>/dev/null | tr 'A-Z' 'a-z'
-  elif py_ok; then
-    python3 -c 'import json,sys
-try:
-    print(str(json.load(open(sys.argv[1])).get(sys.argv[2],"")).lower())
-except Exception:
-    pass' "$1" "$2" 2>/dev/null
   else
-    sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\{0,1\}\([A-Za-z0-9_-]*\)"\{0,1\}.*/\1/p' "$1" | head -1 | tr 'A-Z' 'a-z'
+    text=$(cat "$1" 2>/dev/null) || text=""
+    json_scalar "$text" "$2" | tr 'A-Z' 'a-z'
   fi
 }
 
-unquote() {
-  # Strip shell quoting from one token for matching purposes (expands nothing).
-  local t="$1"
-  t=${t#\$\'}
-  t=${t//\"/}; t=${t//\'/}; t=${t//\\/}
-  printf '%s' "$t"
+tokenize() {
+  # Split $1 into shell words the way the shell would, removing quotes and backslash
+  # escapes and expanding nothing: TOK=(...). `'...'` is literal, `"..."` honours \" \\ \$
+  # and \`, a backslash outside quotes protects the next character. An unterminated quote
+  # runs to the end of the text. Long stretches of ordinary characters are skipped in one
+  # pattern operation, so the cost grows with the number of quotes and spaces, not bytes.
+  TOK=()
+  local s="$1" cur="" inword=0 pre c
+  while [ -n "$s" ]; do
+    pre=${s%%$WORD_CLASS*}
+    if [ -n "$pre" ]; then cur="$cur$pre"; inword=1; s=${s:${#pre}}; continue; fi
+    c=${s:0:1}; s=${s:1}
+    case "$c" in
+      ' '|$'\t')
+        if [ "$inword" -eq 1 ]; then TOK+=("$cur"); cur=""; inword=0; fi ;;
+      \\)
+        if [ -n "$s" ]; then cur="$cur${s:0:1}"; s=${s:1}; fi
+        inword=1 ;;
+      \')
+        inword=1
+        if [ "${cur%\$}" != "$cur" ]; then
+          # $'...' ANSI-C quoting: drop the $, and honour \' and \\ inside
+          cur=${cur%\$}
+          while [ -n "$s" ]; do
+            pre=${s%%$SQ_CLASS*}; cur="$cur$pre"; s=${s:${#pre}}
+            [ -z "$s" ] && break
+            c=${s:0:1}; s=${s:1}
+            [ "$c" = "'" ] && break
+            case "${s:0:1}" in \'|\\) cur="$cur${s:0:1}"; s=${s:1} ;; *) cur="$cur\\" ;; esac
+          done
+        else
+          pre=${s%%\'*}; cur="$cur$pre"
+          if [ "$pre" = "$s" ]; then s=""; else s=${s:$((${#pre}+1))}; fi
+        fi ;;
+      \")
+        inword=1
+        while [ -n "$s" ]; do
+          pre=${s%%$DQ_CLASS*}; cur="$cur$pre"; s=${s:${#pre}}
+          [ -z "$s" ] && break
+          c=${s:0:1}; s=${s:1}
+          [ "$c" = '"' ] && break
+          case "${s:0:1}" in
+            \"|\\|\$|\`) cur="$cur${s:0:1}"; s=${s:1} ;;
+            *) cur="$cur\\" ;;
+          esac
+        done ;;
+    esac
+  done
+  [ "$inword" -eq 1 ] && TOK+=("$cur")
+  return 0
+}
+
+split_ws() {
+  # Split $1 on blanks only (no quote handling): PARTS=(...)
+  set -f   # no globbing: word splitting is the point
+  # shellcheck disable=SC2206
+  PARTS=($1)
+  set +f
 }
 
 is_tf_binary() {
   local b="$1"
   b=${b#\$}
-  b=${b##*/}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip $'…', path, .exe, image tag/digest
+  b=${b##*/}; b=${b##*#}; b=${b%.exe}; b=${b%%:*}; b=${b%%@*}   # strip $'…', path, flake#attr, .exe, image tag/digest
   case "$b" in terraform|tofu|opentofu|terragrunt|tf|tfenv|tgenv|tofuenv|terraform-*|terraform_*|tofu-*|tofu_*) return 0 ;; esac
   return 1
 }
@@ -122,22 +196,23 @@ record_earlier() {
 
 # ---------------------------------------------------------------- input
 INPUT=$(cat)
-PY_OK=""
-py_ok() {
-  if [ -z "$PY_OK" ]; then
-    PY_OK=0
-    if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then PY_OK=1; fi
-  fi
-  [ "$PY_OK" = 1 ]
-}
-CMD=$(json_field '.tool_input.command' 'o.get("tool_input",{}).get("command")' 'command')
+# Parsing below is linear in the input size, but a very large input would still take longer
+# than the hook timeout (and a timed-out hook does not block): refuse it when it could
+# concern terraform at all.
+if [ "${#INPUT}" -gt 262144 ]; then
+  case "$INPUT" in
+    *terraform*|*tofu*|*terragrunt*|*tf*|*tgenv*) deny "whatbreaks: hook input is too large (${#INPUT} bytes) to parse safely; run the terraform step on its own." ;;
+  esac
+  allow
+fi
+CMD=$(json_field '.tool_input.command' 'command')
 
 # Fail closed if the payload looks terraform-ish but could not be parsed.
 if [ -z "$CMD" ]; then
   case "$INPUT" in
     *terraform*|*tofu*|*terragrunt*)
       case "$INPUT" in
-        *apply*|*destroy*) deny "whatbreaks: could not parse the hook input (no jq or working python3?), so refusing to gate blindly. Install jq or python3, or turn the gate off with the apply_gate option." ;;
+        *apply*|*destroy*) deny "whatbreaks: could not read the command from the hook input, so refusing to gate blindly. If this persists, turn the gate off with the apply_gate option and report it." ;;
       esac ;;
   esac
   allow
@@ -151,13 +226,15 @@ case "$FASTN" in
   *) allow ;;
 esac
 
-# A huge or very fragmented command could push the tokenizer past the hook timeout, and a
-# timed-out hook does not block. Refuse to gate it.
+# A huge or very fragmented command could push the parsing below past the hook timeout, and
+# a timed-out hook does not block. Refuse to gate it (the command mentions terraform, or the
+# fast path would have allowed it already).
 if [ "${#CMD}" -gt 131072 ]; then
-  case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command is too long (${#CMD} bytes) to gate safely; split it up." ;; esac
+  deny "whatbreaks: command is too long (${#CMD} bytes) to gate safely; run the terraform step on its own."
 fi
 
 # From here on any unexpected error must deny (exit 1 would be treated as non-blocking).
+# shellcheck disable=SC2154  # rc is assigned inside the trap
 trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"whatbreaks: hook failed internally (exit %s); refusing to allow a terraform command blindly.\"}}\n" "$rc"; exit 2; fi' EXIT
 
 # User switched the gate off via userConfig (CLAUDE_PLUGIN_OPTION_<KEY>).
@@ -166,7 +243,7 @@ case "$(printf '%s' "$GATE" | tr 'A-Z' 'a-z')" in
   false|0|no|off) allow ;;
 esac
 
-CWD=$(json_field '.cwd' 'o.get("cwd")' 'cwd')
+CWD=$(json_field '.cwd' 'cwd')
 [ -z "$CWD" ] && CWD=$(pwd)
 HOME="${HOME:-/nonexistent}"
 MARKER_DIR=""
@@ -181,6 +258,7 @@ esac
 # ---------------------------------------------------------------- split into simple commands
 # Physical lines first (heredoc bodies are line-based), then separators within a line.
 SEGCOUNT=0
+SPECIALS=0          # quotes, blanks, backslashes and separators seen so far (each costs a step)
 LINES="$CMD"
 PENDING=""          # a line ending in a backslash is continued on the next one
 
@@ -203,16 +281,29 @@ HARMLESS="cd pushd popd export unset set true false : echo printf ls pwd test [ 
 READ_ONLY_MENTIONERS="test [ [[ ls echo printf stat file du wc head cat less more diff cmp md5sum sha256sum shasum grep rg egrep fgrep"
 TF_READONLY="init validate fmt show output version providers graph console test login logout workspace refresh get import taint untaint force-unlock metadata modules plan"
 
-SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh nix-shell nix env su runuser chroot"
+SHELLS="bash sh zsh dash ksh eval xargs find script expect ssh nix-shell su runuser chroot"
 GIT_MUTATING="checkout pull stash reset merge rebase restore switch clean apply am cherry-pick revert"
 
 # Split the command into physical lines, and each line into simple commands, as arrays
 # (no here-documents: the loops must run in this shell so state and exit codes carry).
-split_lines() { local IFS=$'\n'; set -f; LINE_ARR=($1); set +f; }
-split_segs()  { local IFS=$'\n'; set -f; SEG_ARR=($1); set +f; }
+split_lines() {
+  local IFS=$'\n'; set -f   # no globbing: splitting on newlines is the point
+  # shellcheck disable=SC2206
+  LINE_ARR=($1)
+  set +f
+}
+split_segs() {
+  local IFS=$'\n'; set -f
+  # shellcheck disable=SC2206
+  SEG_ARR=($1)
+  set +f
+}
 
 LINE_ARR=()
 split_lines "$LINES"
+if [ "${#LINE_ARR[@]}" -gt 2000 ]; then
+  deny "whatbreaks: command has too many lines (${#LINE_ARR[@]}) to gate safely; run the terraform step on its own."
+fi
 for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- here-document bodies are data; skip them until the terminator line
   if [ -n "$HEREDOC_END" ]; then
@@ -223,32 +314,26 @@ for LINE in "${LINE_ARR[@]+"${LINE_ARR[@]}"}"; do
   # ---- join backslash-newline continuations (only outside heredoc bodies)
   if [ -n "$PENDING" ]; then LINE="$PENDING $LINE"; PENDING=""; fi
   case "$LINE" in *\\) PENDING=${LINE%\\}; continue ;; esac
+  # ---- bound the work below: every quote, blank, backslash and separator costs the
+  # tokenizer or the segment loop a step, and a line made of thousands of them would take
+  # longer than the hook timeout (a timed-out hook does not block).
+  sp=${LINE//$STEP_CLASS/}
+  SPECIALS=$((SPECIALS + ${#sp}))
+  if [ "$SPECIALS" -gt 6000 ]; then
+    deny "whatbreaks: command has too many words, quotes or parts ($SPECIALS) to gate safely; run the terraform step on its own."
+  fi
   # ---- heredoc start, detected on tokens so that a quoted "a<<b" does not count
   case "$LINE" in
     *'<<'*)
-      HT=()
-      case "$LINE" in
-        *\"*|*\'*|*\\*)
-          if py_ok; then
-            while IFS= read -r tok; do HT+=("$tok"); done < <(printf '%s' "$LINE" | python3 -c 'import shlex,sys
-s=sys.stdin.read()
-try:
-    toks=shlex.split(s, comments=False, posix=True)
-except ValueError:
-    toks=s.split()
-for t in toks:
-    print(t[:4096])' 2>/dev/null)
-          fi
-          if [ "${#HT[@]}" -eq 0 ]; then read -r -a HT <<< "$LINE" || true; fi ;;
-        *) read -r -a HT <<< "$LINE" || true ;;
-      esac
+      tokenize "$LINE"
+      HT=("${TOK[@]+"${TOK[@]}"}")
       k=0
       while [ $k -lt "${#HT[@]}" ]; do
         tok="${HT[$k]}"
         case "$tok" in
           '<<<'*) ;;
-          '<<'|'<<-') if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END=$(unquote "${HT[$((k+1))]}"); fi; break ;;
-          '<<'*) tok=${tok#'<<'}; tok=${tok#-}; HEREDOC_END=$(unquote "$tok"); break ;;
+          '<<'|'<<-') if [ $((k+1)) -lt "${#HT[@]}" ]; then HEREDOC_END="${HT[$((k+1))]}"; fi; break ;;
+          '<<'*) tok=${tok#'<<'}; tok=${tok#-}; HEREDOC_END="$tok"; break ;;
         esac
         k=$((k+1))
       done ;;
@@ -275,11 +360,11 @@ for t in toks:
 
   SEG_ARR=()
   split_segs "$SEGS"
+  if [ $((SEGCOUNT + ${#SEG_ARR[@]})) -gt 300 ]; then
+    deny "whatbreaks: command has too many parts ($((SEGCOUNT + ${#SEG_ARR[@]}))) to gate safely; run the terraform step on its own."
+  fi
   for SEG in "${SEG_ARR[@]+"${SEG_ARR[@]}"}"; do
     SEGCOUNT=$((SEGCOUNT+1))
-    if [ "$SEGCOUNT" -gt 300 ]; then
-      case "$FAST" in *apply*|*destroy*) deny "whatbreaks: command has too many parts ($SEGCOUNT) to gate safely; split it up." ;; esac
-    fi
     PIPED=0; COMPUTED=0; INHERIT_TEXT=0
     case "$SEG" in @PIPE@*) PIPED=1; SEG=${SEG#@PIPE@} ;; esac
     case "$SEG" in @SUBST@*) COMPUTED=1; SEG=${SEG#@SUBST@}; SUBST_DEPTH=$((SUBST_DEPTH+1)); PRE_CLASS="$LAST_CLASS" ;; esac
@@ -295,28 +380,10 @@ for t in toks:
     REDIRECT_IN=0
     case "$SEG" in *'<'*) REDIRECT_IN=1 ;; esac
 
-    # ---- tokenize: shlex only when quoting is present (it costs a python start), else read -a
+    # ---- tokenize into shell words (quotes removed, nothing expanded)
+    tokenize "$SEG"
     W=()
-    case "$SEG" in
-      *\"*|*\'*|*\\*)
-        if py_ok; then
-          while IFS= read -r tok; do W+=("$tok"); done < <(printf '%s' "$SEG" | python3 -c 'import shlex,sys
-s=sys.stdin.read()
-try:
-    toks=shlex.split(s, comments=False, posix=True)
-except ValueError:
-    toks=s.split()
-for t in toks:
-    print(t[:4096])' 2>/dev/null)
-        fi
-        if [ "${#W[@]}" -eq 0 ]; then
-          read -r -a RAW <<< "$SEG" || true
-          for tok in "${RAW[@]+"${RAW[@]}"}"; do W+=("$(unquote "${tok:0:4096}")"); done
-        fi ;;
-      *)
-        read -r -a RAW <<< "$SEG" || true
-        for tok in "${RAW[@]+"${RAW[@]}"}"; do W+=("${tok:0:4096}"); done ;;
-    esac
+    for tok in "${TOK[@]+"${TOK[@]}"}"; do W+=("${tok:0:4096}"); done
     if [ "${#W[@]}" -eq 0 ]; then PREV_SEG="$SEG"; continue; fi
 
     # drop a trailing comment (a token that *starts* with #)
@@ -327,13 +394,13 @@ for t in toks:
     done
     [ "$N" -eq 0 ] && { PREV_SEG="$SEG"; continue; }
 
-    # ---- strip leading control words and env assignments, remember `cd`
+    # ---- strip leading control words and variable assignments, remember `cd`
     i=0
     while [ $i -lt "$N" ]; do
       t="${W[$i]}"
       case "$t" in
         for|select|case|function) i="$N"; break ;;              # loop/case headers: no command here
-        then|do|else|elif|'!'|if|while|until|fi|done|esac|in) i=$((i+1)); continue ;;
+        then|do|else|elif|'!'|if|while|until|fi|done|'esac'|in) i=$((i+1)); continue ;;
         [A-Za-z_]*=*) i=$((i+1)); continue ;;
       esac
       break
@@ -350,7 +417,7 @@ for t in toks:
       LAST_CLASS="harmless"; PREV_SEG="$SEG"; continue
     fi
 
-    # `echo terraform apply x | bash` (also behind sudo/env): a shell reading its script from a pipe
+    # `echo terraform apply x | bash` (also behind sudo): a shell reading its script from a pipe
     if [ "$PIPED" -eq 1 ]; then
       shell_tok=""
       for tok in "${W[@]+"${W[@]}"}"; do case "${tok##*/}" in bash|sh|zsh|dash|ksh) shell_tok="$tok" ;; esac; done
@@ -368,7 +435,7 @@ for t in toks:
       esac
     fi
 
-    # ---- find the terraform binary anywhere in the command (wrappers, shells, ssh, docker)
+    # ---- find the terraform binary anywhere in the command (wrappers, shells, remote shells, containers)
     # unless the command only consumes text.
     IS_TEXT=0
     for c in $TEXT_CONSUMERS; do [ "$FIRSTBASE" = "$c" ] && IS_TEXT=1; done
@@ -378,7 +445,7 @@ for t in toks:
     [ "$IS_TEXT" -eq 1 ] && SCAN=0
     case "$FIRSTBASE" in
       command) if [ $((i+1)) -lt "$N" ]; then case "${W[$((i+1))]}" in -v|-V|-p) SCAN=0 ;; esac; fi ;;
-      exec|env) ;;
+      exec) ;;
       *) [ "$IS_HARMLESS" -eq 1 ] && SCAN=0 ;;    # `which terraform`, `ls tf`: an argument, not an invocation
     esac
     FOUND=-1
@@ -390,14 +457,17 @@ for t in toks:
         j=$((j+1))
       done
       HAS_SHELL=0
-      for tok in "${W[@]+"${W[@]}"}"; do for c in $SHELLS; do [ "${tok##*/}" = "$c" ] && HAS_SHELL=1; done; done
+      for tok in "${W[@]+"${W[@]}"}"; do
+        case " $SHELLS " in *" ${tok##*/} "*) HAS_SHELL=1 ;; esac
+      done
       if [ "$FOUND" -lt 0 ] && [ "$HAS_SHELL" -eq 1 ]; then
         # Not found: re-split every token on whitespace so that a quoted "terraform apply x"
-        # handed to a shell, ssh, xargs, or a wrapper becomes separate words, and scan again.
+        # handed to a shell, a remote shell, xargs, or a wrapper becomes separate words, and
+        # scan again.
         NEWW=()
         j=$i
         while [ $j -lt "$N" ]; do
-          read -r -a PARTS <<< "${W[$j]}" || true
+          split_ws "${W[$j]}"
           for q in "${PARTS[@]+"${PARTS[@]}"}"; do NEWW+=("$q"); done
           j=$((j+1))
         done
@@ -412,6 +482,26 @@ for t in toks:
       fi
     fi
 
+    if [ "$FOUND" -lt 0 ] && [ "$SCAN" -eq 1 ]; then
+      # `$TF apply x`, `sudo "$BIN" -chdir=d destroy`: the program right before the subcommand
+      # (skipping its flags) is named through a variable, so the binary cannot be seen. The
+      # command as a whole mentions terraform (it passed the fast path), so refuse rather than
+      # guess. `kubectl apply` and friends name their program plainly and are left alone.
+      j=$i
+      while [ $j -lt "$N" ]; do
+        case "${W[$j]}" in
+          apply|destroy)
+            k=$((j-1))
+            while [ $k -gt $i ]; do case "${W[$k]}" in -*) k=$((k-1)) ;; *) break ;; esac; done
+            if [ $k -ge $i ]; then
+              case "${W[$k]}" in
+                \$*) deny "whatbreaks: the program running ${W[$j]} is named through a variable (${W[$k]}), so it cannot be checked. Write it out plainly: terraform plan -out=tfplan, /whatbreaks:review tfplan, terraform apply tfplan." ;;
+              esac
+            fi ;;
+        esac
+        j=$((j+1))
+      done
+    fi
     if [ "$FOUND" -lt 0 ]; then
       # Not a terraform command. Is it harmless to run before an apply on the same line?
       harmless=0
@@ -509,7 +599,7 @@ for t in toks:
         deny "whatbreaks: $BIN destroy is blocked. Create a destroy plan instead:@NL@  $BIN plan -destroy -out=destroy.tfplan@NL@  /whatbreaks:review destroy.tfplan@NL@The verdict will normally be BLOCK (everything is destroyed), so the user must accept it themselves with /whatbreaks:approve destroy.tfplan before $BIN apply destroy.tfplan is allowed."
       fi
       if [ "$AUTO" -eq 1 ] || [ "$ENV_ARGS" -eq 1 ] || [ "$PIPED" -eq 1 ] || [ "$REDIRECT_IN" -eq 1 ]; then
-        deny "whatbreaks: $BIN apply with -auto-approve (or a piped/env-injected approval) and no saved plan file would apply whatever the current plan is, unreviewed. $HOWTO"
+        deny "whatbreaks: $BIN apply with -auto-approve (or an approval injected through a pipe or a variable) and no saved plan file would apply whatever the current plan is, unreviewed. $HOWTO"
       fi
       deny "whatbreaks: $BIN apply without a saved plan file cannot be reviewed before it runs. $HOWTO"
     fi
@@ -524,7 +614,7 @@ for t in toks:
     case "$EARLIER_BASENAMES" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
     case "$REDIRECT_TARGETS" in *" $PLANBASE "*) SAW_UNSAFE=1 ;; esac
     if [ "$SAW_PLAN_SUBCMD" -eq 1 ] || [ "$SAW_UNSAFE" -eq 1 ] || [ "$UNRESOLVED_REDIRECT" -eq 1 ]; then
-      deny "whatbreaks: something earlier in this command (plan -out, a copy/download, a redirection, or a command that could write files) runs before the apply, so the plan file cannot be verified. Run the plan first, then /whatbreaks:review $PLANFILE, then apply in a separate command."
+      deny "whatbreaks: something earlier in this command (plan -out, a copy, a redirection, or a command that could write files) runs before the apply, so the plan file cannot be verified. Run the plan first, then /whatbreaks:review $PLANFILE, then apply in a separate command."
     fi
 
     # Resolve the plan file. With -chdir, terraform resolves relative paths inside that directory.

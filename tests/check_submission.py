@@ -21,6 +21,9 @@ LAUNCHERS = re.compile(r"\b(npx|bunx|pnpm dlx|yarn dlx|uvx|pipx run|uv run|pip i
 SECRET = re.compile(r"(AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|"
                     r"xox[baprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9-]{20,})")
 HEREDOC_LOOP = re.compile(r"^\s*done\s*<<[^<]|^\s*while\s+(IFS=\S*\s+)?read\b.*<<[^<]", re.M)
+# in a hook script: a here-document handed to a program, an inline program, or a here-string
+HOOK_HEREDOC = re.compile(r"(^|[^'\"<])<<-?\s*['\"]?[A-Za-z_]|(^|[^'\"<])<<<\s*[\"'$A-Za-z_]", re.M)
+HOOK_INLINE = re.compile(r"\b(python[23]?|node|perl|ruby|php)\s+(-[a-z]*[ce]|-)(?=\s|$)", re.M)
 PWD_REF = re.compile(r"\$\{?PWD\b")
 FETCH_EXEC = re.compile(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|\b(ba|z)?sh\s+<\(\s*(curl|wget)\b")
 CRED_NAME = re.compile(r"(?<![A-Za-z0-9_])(PASS(WORD)?|PASSWD|SECRET(_KEY)?|API_KEY|ACCESS_KEY|AUTH_TOKEN)=")
@@ -118,6 +121,12 @@ def main() -> int:
             continue  # this file holds the patterns themselves
         if ext == ".sh" and HEREDOC_LOOP.search(s):
             problems.append(f"{r}: here-document read by a loop (held for review); iterate an array instead")
+        if r.startswith("hooks/") and ext == ".sh":
+            code = "\n".join(l for l in s.splitlines() if not l.lstrip().startswith("#"))
+            if HOOK_HEREDOC.search(code):
+                problems.append(f"{r}: here-document or here-string in a hook script (held for review)")
+            if HOOK_INLINE.search(code):
+                problems.append(f"{r}: inline interpreter program in a hook script (held for review)")
         if PWD_REF.search(s):
             problems.append(f"{r}: references the PWD variable (read as the installer's working directory)")
         if FETCH_EXEC.search(s):

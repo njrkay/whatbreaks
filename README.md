@@ -29,7 +29,7 @@ python3 skills/review/scripts/analyze_plan.py evals/rds-replace/resources/plan.j
 |---|---|---|
 | `/whatbreaks:review [plan-file\|plan.json]` (skill) | chat, Cowork, Claude Code | Renders the plan to JSON if needed, runs the deterministic analyzer, then writes a verdict-first review: what breaks, the fix for each finding, what else changes, what to check before applying. Also triggers on its own when you share a plan or ask whether one is safe. |
 | `/whatbreaks:approve <plan-file>` (skill) | Cowork, Claude Code | Records your explicit decision to apply a plan whose verdict was **BLOCK**. In Claude Code it is user-invoked only (`disable-model-invocation`): Claude cannot start it, and the skill makes Claude restate the findings and wait for your words before recording anything. Like the gate, it is a workflow guard, not a security boundary: a direct Bash call to the script still appears as an ordinary permission prompt. `--revoke` deletes the marker so the plan must be reviewed again; `--force` (approve a never-reviewed file) exists for emergencies and is never used without you asking for it. |
-| Apply gate (hook, `hooks/apply-gate.sh`) | Cowork, Claude Code | A `PreToolUse` hook on the Bash tool. Denies `terraform`/`tofu`/`terragrunt` `apply` and `destroy` unless the plan file named in the command has a review marker (or an approval after BLOCK). Also denies `-auto-approve` without a saved plan, any command that writes files and applies in the same line (`plan -out … && apply`, a copy, a download, a redirection), piped or env-injected approvals, shells handed a command string (`bash -c`, `eval`, `xargs`, `ssh`), and `terragrunt run-all apply`. |
+| Apply gate (hook, `hooks/apply-gate.sh`) | Cowork, Claude Code | A `PreToolUse` hook on the Bash tool. Denies `terraform`/`tofu`/`terragrunt` `apply` and `destroy` unless the plan file named in the command has a review marker (or an approval after BLOCK). Also denies `-auto-approve` without a saved plan, any command that writes files and applies in the same line (`plan -out … && apply`, a copy, a redirection), approvals injected through a pipe or an environment variable, shells and remote shells handed a command string, a binary named through a variable, and `terragrunt run-all apply`. Plain bash; it runs no other interpreter or file. |
 | `skills/review/scripts/analyze_plan.py` | everywhere Python 3.9+ runs | The rule engine. Standard library only, no network. Usable on its own and in CI (`--exit-code`). |
 | `skills/review/scripts/redact_plan.py` | everywhere | Strips sensitive values, URL-embedded credentials, and bulky sections from a plan JSON so it can be shared or uploaded to chat. |
 
@@ -147,12 +147,16 @@ boundary.
   hook does not verify who produced it.
 - A denial applies in every permission mode, including bypass mode: hook decisions are separate
   from the permission system (per the Claude Code hooks reference; verified on 2.1.283).
-- It only sees the command string. It looks through `cd`, `sudo`, `env`, `timeout`, `aws-vault`,
-  `bash -c`, `eval`, `xargs`, `ssh`, `&&`/`;`/`|` chains, subshells, loops and `-chdir`, and it
-  treats `TF_CLI_ARGS`, `yes |`, and stdin redirection as auto-approve. It cannot see inside a
-  script file, a Makefile target, or an alias (`./deploy.sh`, `make apply`, `t=terraform; $t apply`),
-  and it does not gate `state push`/`state rm`, `import`, or `taint`. If your team applies through a
-  wrapper, add a `PreToolUse` rule for it or rely on the review skill.
+- It only sees the command string. It looks through `cd`, `sudo`, `timeout`, `aws-vault` and other
+  wrappers, shells and remote shells given a command string, `&&`/`;`/`|` chains, subshells, loops
+  and `-chdir`, and it treats `TF_CLI_ARGS`, `yes |`, and stdin redirection as auto-approve. A
+  binary named through a variable (`$TF apply`) is denied when the same command mentions terraform
+  and invisible when the variable was set earlier. It cannot see inside a script file, a Makefile
+  target, or an alias (`./deploy.sh`, `make apply`), and it does not gate `state push`/`state rm`,
+  `import`, or `taint`. If your team applies through a wrapper, add a `PreToolUse` rule for it or
+  rely on the review skill. A command too long or too fragmented to parse within the hook timeout
+  (over 128 KiB, 2,000 lines, 300 parts, or 6,000 words and quotes outside here-documents) is
+  denied rather than risked, since a timed-out hook does not block.
 - Terragrunt runs Terraform inside `.terragrunt-cache/…`, so give `-out` an absolute path; a
   relative plan file cannot be found by `--plan-file` or by the gate.
 - HCP Terraform / Terraform Enterprise remote runs do not produce a local plan file, so every
@@ -171,7 +175,8 @@ boundary.
   folder including `analyze_plan.py` is copied into Claude's code-execution sandbox and runs there.
 - **Runs:** `terraform`/`tofu`/`terragrunt` `plan` (when you ask for a review without a plan file)
   and `show -json` (whenever a binary plan is reviewed), the bundled Python scripts, and the bash
-  hook. Nothing is installed; there are no package launchers, no dependencies, no compiled code.
+  hook, which uses `jq` when it is installed and parses its input itself otherwise. Nothing is
+  installed; there are no package launchers, no dependencies, no compiled code.
   `.github/` and `tests/` are development files that the plugin never runs.
 - **Writes:** with no argument, `whatbreaks.tfplan` and `whatbreaks.tfplan.json` in the working
   directory; with a plan file, `<plan>.json` beside it; for very large JSON, `<plan>.slim.json`.
@@ -188,13 +193,14 @@ boundary.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 tests/test_fixtures.py   # 26 fixture plans with expected verdicts and findings
-bash tests/test_hook.sh                                    # 149 apply-gate scenarios, including known bypass shapes
+bash tests/test_hook.sh                                    # 178 apply-gate scenarios, including known bypass shapes
 python3 tests/check_submission.py                          # the directory's pre-submission rules
 claude plugin validate .                                   # manifest and component checks
-claude plugin eval . --allow-tools Write "Bash(python3 skills/review/scripts/analyze_plan.py *)" # behavioural evals (uses your Claude credentials)
 ```
 
-The `evals/` suite has one case per fixture plus a pasted-text case; each checks that Claude names
+The behavioural evals live in `evals/` and run through Claude Code's plugin evaluation command on
+your own account; `evals/README.md` gives the command and the tool grants it needs. The suite has
+one case per fixture plus a pasted-text case; each checks that Claude names
 the right resource, gives the right verdict, mentions the right fix, and that the review skill was
 what produced the answer, plus an LLM rubric on the explanation. Fixtures are generated by
 `tests/gen_fixtures.py` with Terraform's real `after_unknown` shapes and contain no real
@@ -207,7 +213,7 @@ analyzer tests on Python 3.9 and 3.12 and the hook tests on Ubuntu and macOS (ba
 - **"has not been reviewed"** on apply — run `/whatbreaks:review <that file>`; if you re-planned,
   the file changed and needs a fresh review.
 - **"writes files and then applies in the same line"** — the gate refuses `plan && apply` (and
-  `cp`, a download, or `>` before an apply) because the hash it checks might not be the file Terraform
+  `cp`, `>`, or a fetched file before an apply) because the hash it checks might not be the file Terraform
   reads. Plan, review, then apply as separate commands.
 - **The gate denies but you already reviewed** — the review was probably run on a JSON without
   `--plan-file`, so no marker matches the binary file. Re-run `/whatbreaks:review <plan-file>`.
